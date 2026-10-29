@@ -61,6 +61,9 @@ function iconImage(name, onLoad) {
 
 const BUTTON_FONT = `500 34px ${FONT}`;
 const TITLE_FONT = `650 46px ${FONT}`;
+const CORNER_FONT = `500 28px ${FONT}`; // the top-right corner's button (Options: the scene scale)
+const CORNER_H = 48;
+const cornerWidth = (corner) => (corner ? textWidth(corner.widest ?? corner.label, CORNER_FONT) + 32 : 0);
 const INSET = 18; // icon from the button's left edge, text from its right
 const VALUE_GAP = 40; // at least this between a setting's name and its value
 const TRAILING = 36; // a dropdown's chevron, at the right edge
@@ -97,7 +100,7 @@ function sliderValueAt(item, r, px) {
   return snapToSlider(item.slider, min + clamp((px - x0) / (x1 - x0), 0, 1) * (max - min));
 }
 
-function panelWidth(title, labels, choices, sliderLabels) {
+function panelWidth(title, labels, choices, sliderLabels, corner) {
   // the settings sit indented in their groups, and their choices further, two to a row
   const button = OPTION_INDENT + INSET + ICON + ICON_GAP + Math.max(0, ...labels.map(labelWidth)) + ICON_GAP + TRAILING + INSET;
   // a slider's label gets the left of its button, its track the rest
@@ -105,7 +108,7 @@ function panelWidth(title, labels, choices, sliderLabels) {
   const choiceWidth = ({ label, icon }) => textWidth(label, OPTION_FONT) + (icon ? OPTION_ICON + OPTION_ICON_GAP : 0);
   const choice = 2 * INSET + CHECK + 10 + Math.max(0, ...choices.map(choiceWidth));
   const choiceRow = 2 * OPTION_INDENT + 2 * choice + OPTION_GAP;
-  const titleRow = TOGGLE + 24 + textWidth(title, TITLE_FONT);
+  const titleRow = TOGGLE + 24 + textWidth(title, TITLE_FONT) + (corner ? 24 + cornerWidth(corner) : 0);
   return Math.ceil(2 * PAD + Math.max(button, slider, choiceRow, titleRow));
 }
 
@@ -232,7 +235,7 @@ function PanelSlab({ w, h }) {
  * docking and stacking it (see Grab.jsx), which also places the group.
  */
 export function XRPanel({ panel, onSelect, groupRef }) {
-  const { toggle, title, status, items, labels, open } = panel;
+  const { toggle, title, status, items, labels, open, corner } = panel;
   const mesh = useRef(null);
   const [pointerKey, setPointerKey] = useState(null);
   const [gazeKey, setGazeKey] = useState(null);
@@ -242,8 +245,8 @@ export function XRPanel({ panel, onSelect, groupRef }) {
     const settings = settingItems(items);
     const choices = settings.flatMap((item) => item.dropdown?.options ?? []);
     const sliderLabels = (labels ?? []).filter((l) => settings.some((i) => i.slider && splitLabel(i.label).name === splitLabel(l).name));
-    return panelWidth(title, labels ?? settings.map((i) => i.label), choices, sliderLabels);
-  }, [title, labels, items]);
+    return panelWidth(title, labels ?? settings.map((i) => i.label), choices, sliderLabels, corner);
+  }, [title, labels, items, corner?.widest]); // eslint-disable-line react-hooks/exhaustive-deps
   // { w, h } in canvas px, dragged to with the grip: the width, and the height it may grow to
   const [size, setSize] = useState(null);
   const maxH = size?.h ?? MAX_VIEW_H;
@@ -262,6 +265,8 @@ export function XRPanel({ panel, onSelect, groupRef }) {
   const width = contentW + scrollColumn;
   const height = scrollable ? maxH : contentH;
   const grip = open ? { id: RESIZE, x: width - GRIP, y: height - GRIP, w: GRIP, h: GRIP } : null;
+  const cornerW = cornerWidth(corner);
+  const cornerRect = open && corner ? { id: corner.id, x: width - PAD - cornerW, y: TITLE_Y - CORNER_H / 2, w: cornerW, h: CORNER_H } : null;
   const scrollMax = contentH - height;
   const [scroll, setScroll] = useState(0);
   const scrollTop = clamp(scroll, 0, scrollMax);
@@ -309,7 +314,15 @@ export function XRPanel({ panel, onSelect, groupRef }) {
     ctx.textAlign = 'left';
     ctx.fillStyle = '#ffffff';
     ctx.font = TITLE_FONT;
-    if (open) centredText(ctx, fit(ctx, title, width - 2 * PAD - TOGGLE - 24), PAD + TOGGLE + 24, TITLE_Y);
+    if (open) centredText(ctx, fit(ctx, title, width - 2 * PAD - TOGGLE - 24 - (cornerRect ? cornerW + 24 : 0)), PAD + TOGGLE + 24, TITLE_Y);
+    if (cornerRect) {
+      drawButtonFrame(ctx, cornerRect, { hot: hovered === corner.id });
+      ctx.font = CORNER_FONT;
+      ctx.fillStyle = 'rgba(232, 236, 246, 0.9)';
+      ctx.textAlign = 'center';
+      centredText(ctx, corner.label, cornerRect.x + cornerRect.w / 2, TITLE_Y);
+      ctx.textAlign = 'left';
+    }
     if (open && status) {
       ctx.fillStyle = 'rgba(232, 236, 246, 0.6)';
       ctx.font = `400 26px ${FONT}`;
@@ -450,12 +463,13 @@ export function XRPanel({ panel, onSelect, groupRef }) {
       }
     }
     texture.needsUpdate = true;
-  }, [canvas, texture, width, height, rects, open, title, status, hovered, iconsLoaded, scrollTop, scrollMax, bar, viewTop, viewBottom]);
+  }, [canvas, texture, width, height, rects, open, title, status, hovered, iconsLoaded, scrollTop, scrollMax, bar, viewTop, viewBottom, corner?.label]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** The control at canvas px (px, py): the gear, a scroll control, or a setting or choice in view. */
   const controlAt = (px, py) => {
     const inside = (q, y = q.y) => px >= q.x && px <= q.x + q.w && py >= y && py <= y + q.h;
     if (inside(rects[0])) return toggle.id;
+    if (cornerRect && inside(cornerRect)) return corner.id;
     if (grip && inside(grip)) return RESIZE;
     if (bar) for (const q of [bar.up, bar.down, bar.track]) if (inside(q)) return q.id;
     if (py < viewTop || py > viewBottom) return null;

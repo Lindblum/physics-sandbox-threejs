@@ -12,7 +12,8 @@ import { Probes, useControllerGrips } from './Grab.jsx';
 import { SOLID_BACKGROUND } from './menu.js';
 import { FramePacing } from './FramePacing.jsx';
 import { Physics, useRapier } from '@react-three/rapier';
-import { AirDrag, CUBE_SIZE, ContactSounds, Disc, HeldLabels, Holds, SPHERE_RADIUS, SandboxBodies, makeBody, withMade } from './Physics.jsx';
+import { AirDrag, ContactSounds, Disc, GlowLights, Holds, MaterialLabels, Particles, SandboxBodies, makeBody, withMade } from './Physics.jsx';
+import { shapeOf } from './shapes.js';
 import { randomMaterial } from './materials.js';
 import { PhoneStereoCameraFeed, PhoneStereoXR } from './PhoneStereo.jsx';
 import { SideBySide } from './SideBySide.jsx';
@@ -37,7 +38,8 @@ class AssetBoundary extends Component {
 }
 
 // The windowed view looks at the disc from a little way off, a bit above;
-// in XR you start just off its edge, facing its centre
+// in XR you start just off its edge, facing its centre, real size: the disc's
+// top is the floor you stand on
 const LOOK_AT = [0, 0.15, 0];
 const XR_START = [0, 0, 1.5];
 const GRAVITY = [0, -9.81, 0];
@@ -115,9 +117,10 @@ function Backdrop({ background }) {
 /**
  * What the objects reflect (the metals most): the skybox when it is
  * showing, otherwise a neutral studio (the stars would look wrong against
- * passthrough or a solid colour).
+ * passthrough or a solid colour). Video → Reflections off: nothing (only the
+ * lights light them; faster).
  */
-function Environment({ sky }) {
+function Environment({ sky, reflections }) {
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
   const environment = useMemo(() => {
@@ -135,18 +138,19 @@ function Environment({ sky }) {
     pmrem.dispose();
     return target;
   }, [gl, sky]);
+  useEffect(() => () => environment.dispose(), [environment]);
   useEffect(() => {
+    if (!reflections) return;
     scene.environment = environment.texture;
     return () => {
       if (scene.environment === environment.texture) scene.environment = null;
-      environment.dispose();
     };
-  }, [scene, environment]);
+  }, [scene, environment, reflections]);
   return null;
 }
 
-function SkyEnvironment() {
-  return <Environment sky={useLoader(THREE.TextureLoader, SKY_URL)} />;
+function SkyEnvironment({ reflections }) {
+  return <Environment sky={useLoader(THREE.TextureLoader, SKY_URL)} reflections={reflections} />;
 }
 
 /** A sun casting shadows onto the disc, and a soft fill from the sky. */
@@ -181,25 +185,43 @@ function WakeOnGravity({ gravity }) {
 }
 
 const _head = new THREE.Vector3();
+const _yAxis = new THREE.Vector3(0, 1, 0);
 const _hand = new THREE.Vector3();
 
 /**
  * Left thumbstick moves, right thumbstick turns smoothly about the head,
  * except while that hand's grip holds something (its stick is then the
  * grip's). The grip buttons pick up the objects, or carry, dock and undock
- * the panels (see Grab.jsx), which travel with the player.
+ * the panels, or both in mid-air scale the scene (see Grab.jsx); the panels
+ * travel with the player. `origin`: ref to the XR origin, whose scale is the
+ * player's size (the scene scale's inverse); `onScale(scale)` hears it
+ * change; `resetScale` changing puts it back to real size, where you stand.
  */
-function Player({ panels, registry, holds, textSize, homeScale, children }) {
-  const origin = useRef(null);
+function Player({ origin, panels, registry, holds, textSize, homeScale, onScale, resetScale, children }) {
   const left = useRef(null);
   const right = useRef(null);
   const probes = useMemo(() => ({ left, right }), []);
-  const holding = useControllerGrips({ panels, origin, registry, holds, probes, textSize, home: MENU_HOME, homeScale });
+  const gl = useThree((s) => s.gl);
+  const holding = useControllerGrips({ panels, origin, registry, holds, probes, textSize, home: MENU_HOME, homeScale, onScale });
+  // back to real size: the floor the real floor again, your head where it was over it
+  useEffect(() => {
+    const o = origin.current;
+    if (!resetScale || !o || o.scale.x === 1) return;
+    const head = (gl.xr.isPresenting ? gl.xr.getCamera() : null)?.getWorldPosition(new THREE.Vector3());
+    o.updateMatrixWorld();
+    const tracked = head ? head.clone().applyMatrix4(o.matrixWorld.clone().invert()) : new THREE.Vector3();
+    o.scale.setScalar(1);
+    if (head) o.position.copy(head).sub(tracked.applyAxisAngle(_yAxis, o.rotation.y));
+    o.position.y = 0;
+    onScale(1);
+  }, [resetScale]); // eslint-disable-line react-hooks/exhaustive-deps
   useXRControllerLocomotion(
     (velocity, turn, delta, state) => {
       const o = origin.current;
       if (!o) return;
-      if (!holding.current.left) o.position.addScaledVector(velocity, delta);
+      // (as fast for your size whatever the scene's scale)
+      if (!holding.current.left) o.position.addScaledVector(velocity, delta * o.scale.x);
+      turn = -turn; // (the stick pushed right turns you right)
       if (!turn || holding.current.right) return;
       // swing the origin around the head so turning doesn't move the viewer
       state.camera.getWorldPosition(_head);
@@ -236,12 +258,13 @@ const toolPointer = (e) => !e.internalPointer || e.pointerType === 'ray';
 /**
  * The tools on the objects and the disc. Select: press on an object to pick it
  * up; it follows the pointer at the distance it was taken from (the mouse
- * wheel moves it nearer or further), and let go it's thrown. Cube / Sphere: a
- * click on the disc or an object makes one there, resting on the face clicked,
- * of the Material chosen (or a random one). Returns [handlers(id) for an
- * object's mesh, the disc's onClick].
+ * wheel moves it nearer or further), and let go it's thrown. The shapes: a
+ * click (or a controller's trigger) on the disc or an object makes one there,
+ * resting on the face clicked, of the Material chosen (or a random one). Any
+ * pointer over an object puts it in `pointed` (pointer id -> object id), for
+ * its label. Returns [handlers(id) for an object's mesh, the disc's onClick].
  */
-function useTools({ tool, material, registry, holds, setBodies }) {
+function useTools({ tool, material, registry, holds, setBodies, pointed }) {
   const controls = useThree((s) => s.controls);
   const drag = useRef(null); // { id, pointerId, ray, distance, offset }
 
@@ -267,9 +290,10 @@ function useTools({ tool, material, registry, holds, setBodies }) {
   };
 
   const make = (e) => {
-    if (tool === 'select' || !toolPointer(e) || (e.delta ?? 0) > CLICK_SLOP || !e.point) return;
+    // (an XR pointer's click has no `delta`: reading it throws)
+    if (tool === 'select' || !toolPointer(e) || (!e.internalPointer && (e.delta ?? 0) > CLICK_SLOP) || !e.point) return;
     e.stopPropagation();
-    const half = tool === 'cube' ? CUBE_SIZE / 2 : SPHERE_RADIUS;
+    const half = shapeOf(tool).radius;
     // out from the face clicked, resting on it (a sliver apart, so they don't start overlapping)
     const normal = e.face ? e.face.normal.clone().transformDirection(e.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
     const at = e.point.clone().addScaledVector(normal, half + 0.005);
@@ -308,11 +332,15 @@ function useTools({ tool, material, registry, holds, setBodies }) {
     },
     onClick: make,
     onPointerOver: (e) => {
-      if (e.internalPointer) return;
+      if (!toolPointer(e)) return;
       e.stopPropagation();
-      cursor(tool === 'select' ? 'grab' : 'copy');
+      pointed.set(e.pointerId, id);
+      if (!e.internalPointer) cursor(tool === 'select' ? 'grab' : 'copy');
     },
-    onPointerOut: () => !drag.current && cursor(''),
+    onPointerOut: (e) => {
+      if (pointed.get(e.pointerId) === id) pointed.delete(e.pointerId);
+      if (!e.internalPointer && !drag.current) cursor('');
+    },
   });
   return [handlers, make];
 }
@@ -323,7 +351,7 @@ function useTools({ tool, material, registry, holds, setBodies }) {
  * `bodies` / `setBodies`: the objects (see Physics.jsx); `registry`: their bodies, by id.
  * `menuOverlay`: the page shows Options over the scene (Phone AR), so no panel in it.
  */
-export default function Scene({ state, panels, onSelect, menuOverlay, phone, bodies, setBodies, registry }) {
+export default function Scene({ state, panels, onSelect, menuOverlay, phone, bodies, setBodies, registry, onScale, resetScale }) {
   const inSession = useXR((s) => s.mode === 'immersive-vr' || s.mode === 'immersive-ar');
   const inAR = useXR((s) => s.mode === 'immersive-ar');
   // a phone's AR session drawn as two lens-corrected eyes
@@ -338,8 +366,11 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   const showsSky = state.background === 'skybox' || (state.background === 'passthrough' && !inAR && !cameraPassthrough);
   useEffect(() => setCameraFailed(false), [cameraPassthrough]);
   const discCollider = useRef(null);
+  const origin = useRef(null);
+  const pointed = useMemo(() => new Map(), []);
+  const viewScale = () => origin.current?.scale.x ?? 1;
   const holds = useMemo(() => new Holds(registry), [registry]);
-  const [handlers, make] = useTools({ tool: state.tool, material: state.material, registry, holds, setBodies });
+  const [handlers, make] = useTools({ tool: state.tool, material: state.material, registry, holds, setBodies, pointed });
   const menuPanel = useRef(null);
   const viewPanel = useRef(null);
   const toolsPanel = useRef(null);
@@ -370,13 +401,13 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
         />
       )}
       {showsSky ? (
-        <AssetBoundary fallback={<Environment />}>
+        <AssetBoundary fallback={<Environment reflections={state.reflections} />}>
           <Suspense fallback={null}>
-            <SkyEnvironment />
+            <SkyEnvironment reflections={state.reflections} />
           </Suspense>
         </AssetBoundary>
       ) : (
-        <Environment />
+        <Environment reflections={state.reflections} />
       )}
       <Lights />
       <Physics gravity={state.gravity ? GRAVITY : NO_GRAVITY} paused={state.paused}>
@@ -386,8 +417,13 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
         <AirDrag registry={registry} />
         <ContactSounds registry={registry} disc={discCollider} />
       </Physics>
-      <HeldLabels registry={registry} holds={holds} />
+      <Particles registry={registry} />
+      <GlowLights registry={registry} />
+      <MaterialLabels registry={registry} holds={holds} pointed={pointed} viewScale={viewScale} />
       <Player
+        origin={origin}
+        onScale={onScale}
+        resetScale={resetScale}
         panels={panelRefs}
         registry={registry}
         holds={holds}

@@ -3,14 +3,30 @@
 // it here, as `material.row.<column>` (a number where it reads as one, null
 // where empty), without changing this file. The columns used so far:
 //
-//   state                    solid, liquid or gas. Gases don't collide: they float or sink in the air
+//   state                    solid, liquid, gas or plasma. Gases and plasmas don't collide: they
+//                            float or sink in the air
 //   density_kg_m3, fill      the substance's density, and how much of an object is it (a hollow one is
 //                            mostly air): its mass is density × fill × volume
 //   friction, restitution    how it slides and bounces. Friction combines by the lesser of the two
-//                            surfaces (ice slides on anything), bounce by their average
+//                            surfaces (ice slides on anything), bounce by their average, or by
+//                            restitution_combine (max: bouncy off anything)
 //   color ... clearcoat      how it looks (three.js's MeshPhysicalMaterial, and glTF for Blender)
+//   emissive, emissive_intensity, emissive_pattern   its glow (pattern: only in its texture's hollows,
+//                            as lava glows through its cracks); light_cd: the light it casts (candela)
+//   luster                   the mineralogist's word for its shine (metallic, vitreous, resinous, ...)
+//   reflectance              how much light its surface mirrors when not a metal (0 to 1)
+//   texture, texture_scale_m its surface pattern (see textures.js) and how big that is (m)
+//   normal_strength          how deep the pattern's bumps look
+//   pattern_contrast         how much the pattern lightens and darkens its colour
+//   roughness_variance       how much the pattern varies its roughness (polished highs, rough lows)
+//   color_variance           how much one object's colour differs from the next
 //   impact_*, scrape_*       its sounds (see sound.js): a 10 cm object's ring when struck, and its
 //                            hiss when it slides
+//   gravity_scale, damping   overrides: how much gravity pulls it (else 1 less its buoyancy), and
+//                            how quickly it settles (hovering things)
+//   jiggle                   how much it wobbles when struck (a rigid body's looks only)
+//   particles, particle_rate, impact_particles   the particles it gives off all the time, how many
+//                            (× the preset's), and where struck (see particles.js)
 //   the rest                 for simulations to come (heat, melting, fluids, sound in it)
 
 import table from './materials.csv?raw';
@@ -57,6 +73,16 @@ function material(row) {
     density: n(row.density_kg_m3, 1000) * fill,
     friction: n(row.friction, 0.5),
     restitution: n(row.restitution, 0.3),
+    restitutionCombine: row.restitution_combine ?? 'average',
+    /** collides with things (gases and plasmas pass through) */
+    solid: row.state !== 'gas' && row.state !== 'plasma',
+    gravityScale: typeof row.gravity_scale === 'number' ? row.gravity_scale : null,
+    damping: n(row.damping, 0),
+    jiggle: n(row.jiggle, 0),
+    particles: row.particles ? { preset: row.particles, rate: n(row.particle_rate, 1) } : null,
+    impactParticles: row.impact_particles ?? null,
+    light: n(row.light_cd, 0),
+    luster: row.luster,
     look: {
       color: row.color ?? '#888888',
       metalness: n(row.metalness, 0),
@@ -66,6 +92,16 @@ function material(row) {
       ior: n(row.ior, 1.5),
       sheen: n(row.sheen, 0),
       clearcoat: n(row.clearcoat, 0),
+      emissive: row.emissive ?? null,
+      emissiveIntensity: n(row.emissive_intensity, 0),
+      emissivePattern: row.emissive_pattern === 'yes',
+      reflectance: n(row.reflectance, 0.5),
+      texture: row.texture ?? null,
+      textureScale: n(row.texture_scale_m, 0.05),
+      normalStrength: n(row.normal_strength, 0),
+      patternContrast: n(row.pattern_contrast, 0),
+      roughnessVariance: n(row.roughness_variance, 0),
+      colorVariance: n(row.color_variance, 0),
     },
     sound: {
       hz: n(row.impact_hz, 0),
@@ -98,8 +134,8 @@ export const AIR_DENSITY = AIR.density;
 export const DISC_MATERIAL = materialById('concrete');
 /** The ten starting cubes', one each. */
 export const STARTING_MATERIALS = ['wood', 'steel', 'rubber', 'ice', 'glass', 'granite', 'foam', 'aluminium', 'gold', 'plastic'].map(materialById);
-/** A solid or liquid one at random (a gas would float away). */
+/** A solid or liquid one at random (a gas would float away, a plasma hover). */
 export function randomMaterial() {
-  const pick = MATERIALS.filter((m) => m.state !== 'gas');
+  const pick = MATERIALS.filter((m) => m.solid && m.gravityScale == null);
   return pick[Math.floor(Math.random() * pick.length)];
 }

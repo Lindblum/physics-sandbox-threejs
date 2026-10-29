@@ -2,7 +2,7 @@ import { useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { pulse, readControllers } from './grip.js';
-import { CUBE_SIZE, SPHERE_RADIUS } from './Physics.jsx';
+import { distanceOutside as shapeDistance } from './shapes.js';
 
 // Touch controller grips: the objects, and the XR panels, as in grid-game-threejs.
 //
@@ -26,6 +26,12 @@ import { CUBE_SIZE, SPHERE_RADIUS } from './Physics.jsx';
 // While a grip holds something, its thumbstick pushes it away along the ray
 // (up) or reels it in (down), and rolls it about the ray (left / right),
 // instead of moving or turning the player.
+//
+// Both grips held in mid-air (neither probe on an object, neither holding a
+// panel), as in Tilt Brush: the scene scales with the distance between the
+// hands and turns with the line between them, about their midpoint, which
+// stays put. It's the player that changes size (the XR origin scales), so the
+// physics is untouched; the probes, reaches and labels go with them.
 //
 // Without controllers (gaze, phones) the menu stands at `home` instead and
 // the View and Tools panels hide.
@@ -71,6 +77,9 @@ const PUSH_RATE = 1.5; // per second at full tilt, this share of its distance fr
 const PUSH_MIN_M = 0.25; // ...but never slower than at this distance
 const REEL_MIN_M = 0.05; // reeled in no nearer the hand than this
 const ROLL_RATE = Math.PI; // radians per second at full tilt
+// scaling the scene
+export const SCENE_SCALE = { min: 0.05, max: 20 }; // how small and big the scene gets
+const SCALE_JOIN_S = 0.3; // the second grip this soon after the first, which took an object it pointed at, still scales (and drops it)
 
 const _world = new THREE.Matrix4();
 const _local = new THREE.Matrix4();
@@ -83,6 +92,7 @@ const _pos = new THREE.Vector3();
 const _quat = new THREE.Quaternion();
 const _scale = new THREE.Vector3();
 const _tip = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0);
 
 /** A controller's probe's centre, into `out`, from its target-ray pose (world): PROBE_TIP in front of it. */
 export const controllerTip = (rayMatrix, out) => out.copy(PROBE_TIP).applyMatrix4(rayMatrix);
@@ -105,15 +115,7 @@ function rotationAbout(origin, axis, angle) {
 
 /** How far world point `p` is outside object `entry`'s solid (0 or less: inside it). */
 function distanceOutside(entry, p) {
-  const mesh = entry.mesh.current;
-  const local = mesh.worldToLocal(_v.copy(p));
-  if (entry.def.shape === 'sphere') return local.length() - SPHERE_RADIUS;
-  const h = CUBE_SIZE / 2;
-  const dx = Math.max(Math.abs(local.x) - h, 0);
-  const dy = Math.max(Math.abs(local.y) - h, 0);
-  const dz = Math.max(Math.abs(local.z) - h, 0);
-  const outside = Math.hypot(dx, dy, dz);
-  return outside > 0 ? outside : Math.max(Math.abs(local.x), Math.abs(local.y), Math.abs(local.z)) - h;
+  return shapeDistance(entry.def.shape, entry.mesh.current.worldToLocal(_v.copy(p)));
 }
 
 /**
@@ -123,13 +125,17 @@ function distanceOutside(entry, p) {
  * `holds`: the objects and who holds them (see Physics.jsx); `probes`: { left,
  * right }, refs to the probes' meshes, placed here; `home`: the menu's {
  * position, rotation } without controllers, `homeScale` its scale there;
- * `textSize`: Accessibility → Text Size (the panels that much bigger).
+ * `textSize`: Accessibility → Text Size (the panels that much bigger);
+ * `onScale(scale)`: the scene scale changed (both grips in mid-air).
  * Returns a ref to which hands' grips hold something now ({ left, right }),
  * whose sticks are then theirs, not the player's.
  */
-export function useControllerGrips({ panels, origin, registry, holds, probes, textSize, home, homeScale }) {
+export function useControllerGrips({ panels, origin, registry, holds, probes, textSize, home, homeScale, onScale }) {
   const gl = useThree((s) => s.gl);
-  const grabs = useRef({}); // hand -> { target: 'body', id, offset, point } | { target: 'panel', key, offset, point, size, grow, zone } | { target: 'none' }
+  // hand -> { target: 'body', id, offset, point, byRay, at } | { target: 'panel', key, offset, point, size, grow, zone } | { target: 'scale' } | { target: 'none' }
+  const grabs = useRef({});
+  const scaling = useRef(null); // both grips in mid-air: { k0, turn0, mid0 (world), span0, angle0 (tracking space) }
+  const reported = useRef(1);
   const docks = useRef(Object.fromEntries(Object.entries(FIRST_DOCK).map(([key, hand]) => [key, { dock: hand }]))); // key -> { dock: hand | null, on, fly }
   const taps = useRef({}); // hand -> { pressedAt, tappedAt, count }
   const pressed = useRef({});
@@ -147,12 +153,36 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
     const now = performance.now() / 1000;
     const referenceSpace = gl.xr.getReferenceSpace();
     const o = origin.current;
-    const controllers = frame && o && referenceSpace ? readControllers(frame, referenceSpace, o) : {};
+    let controllers = frame && o && referenceSpace ? readControllers(frame, referenceSpace, o) : {};
+    const k = o?.scale.x ?? 1; // the player's size: reaches in the world go with it
     const buzz = (hand, [strength, ms]) => pulse(controllers[hand]?.gamepad, strength, ms);
     const groupOf = (key) => panels[key]?.current ?? null;
     const shownPanels = () => Object.keys(docks.current).filter((key) => groupOf(key) && isShown(groupOf(key)));
     const bodies = () => [...registry.values()].filter((e) => e.mesh.current);
     if (o) _originInverse.copy(o.matrixWorld).invert();
+
+    // both grips in mid-air: the scene scales and turns about the hands' midpoint (the player does, inversely)
+    const sc = scaling.current;
+    if (sc && controllers.left && controllers.right) {
+      const l = controllers.left.position.clone().applyMatrix4(_originInverse);
+      const r = controllers.right.position.clone().applyMatrix4(_originInverse);
+      const span = r.clone().sub(l);
+      if (span.length() > 0.02) {
+        const size = THREE.MathUtils.clamp((sc.k0 * sc.span0) / span.length(), 1 / SCENE_SCALE.max, 1 / SCENE_SCALE.min);
+        const turn = sc.turn0 + sc.angle0 - Math.atan2(span.x, span.z);
+        const mid = l.add(r).multiplyScalar(0.5 * size).applyAxisAngle(_up, turn);
+        o.scale.setScalar(size);
+        o.rotation.y = turn;
+        o.position.copy(sc.mid0).sub(mid);
+        o.updateMatrixWorld(true);
+        _originInverse.copy(o.matrixWorld).invert();
+        controllers = readControllers(frame, referenceSpace, o);
+        if (Math.abs(1 / size - reported.current) > reported.current * 0.005) {
+          reported.current = 1 / size;
+          onScale?.(1 / size);
+        }
+      }
+    }
 
     /** Puts panel `key`'s group at world matrix `world` (its parent is the origin). */
     const placeWorld = (key, world) => {
@@ -164,8 +194,8 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       controllerTip(c.rayMatrix, _tip);
       let best = null;
       for (const entry of bodies()) {
-        const d = distanceOutside(entry, _tip) - PROBE_RADIUS;
-        if (d <= PROBE_REACH && (!best || d < best.d)) best = { id: entry.def.id, d };
+        const d = distanceOutside(entry, _tip) - PROBE_RADIUS * k;
+        if (d <= PROBE_REACH * k && (!best || d < best.d)) best = { id: entry.def.id, d };
       }
       return best?.id ?? null;
     };
@@ -173,7 +203,7 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
     /** The object controller `c` points at (the nearest), or null. */
     const bodyPointed = (c) => {
       raycaster.ray.copy(c.ray);
-      raycaster.far = RAY_REACH;
+      raycaster.far = RAY_REACH * k;
       const [hit] = raycaster.intersectObjects(bodies().map((e) => e.mesh.current), false);
       return hit?.object.userData.bodyId ?? null;
     };
@@ -210,7 +240,7 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       g.updateWorldMatrix(true, false);
       const local = g.worldToLocal(_v.copy(c.position));
       local.set(THREE.MathUtils.clamp(local.x, b.left, b.right), THREE.MathUtils.clamp(local.y, b.bottom, b.top), 0);
-      return g.localToWorld(local).distanceTo(c.position) < DOCK_REACH ? otherHand(hand) : null;
+      return g.localToWorld(local).distanceTo(c.position) < DOCK_REACH * k ? otherHand(hand) : null;
     };
 
     const release = (key) => {
@@ -244,8 +274,8 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       };
     };
 
-    /** `hand` picks up object `id`, from the other hand or a pointer if they had it. */
-    const takeBody = (hand, c, id) => {
+    /** `hand` picks up object `id`, from the other hand or a pointer if they had it (`byRay`: pointed at from afar). */
+    const takeBody = (hand, c, id, byRay = false) => {
       const entry = registry.get(id);
       const other = otherHand(hand);
       if (grabs.current[other]?.id === id) grabs.current[other] = { target: 'none' };
@@ -259,7 +289,27 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
         id,
         offset: _gripInverse.clone().multiply(mesh.matrixWorld),
         point: mesh.getWorldPosition(new THREE.Vector3()).applyMatrix4(_gripInverse),
+        byRay,
+        at: now,
       };
+    };
+
+    /** Both grips in mid-air: scaling starts from here. */
+    const startScale = () => {
+      const l = controllers.left.position.clone().applyMatrix4(_originInverse);
+      const r = controllers.right.position.clone().applyMatrix4(_originInverse);
+      const span = r.clone().sub(l);
+      scaling.current = {
+        k0: o.scale.x,
+        turn0: o.rotation.y,
+        mid0: controllers.left.position.clone().add(controllers.right.position).multiplyScalar(0.5),
+        span0: Math.max(span.length(), 0.02),
+        angle0: Math.atan2(span.x, span.z),
+      };
+      for (const h of HANDS) {
+        grabs.current[h] = { target: 'scale' };
+        buzz(h, PULSE.grab);
+      }
     };
 
     const gripStart = (hand, c) => {
@@ -272,6 +322,13 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       const touched = bodyTouched(c);
       if (touched != null) {
         takeBody(hand, c, touched);
+        return;
+      }
+      // the other grip already held in mid-air (or just took something it pointed at): both scale the scene
+      const other = grabs.current[otherHand(hand)];
+      if (o && pressed.current[otherHand(hand)] && controllers[otherHand(hand)] && (other?.target === 'none' || (other?.target === 'body' && other.byRay && now - other.at < SCALE_JOIN_S))) {
+        if (other.target === 'body') holds.release(other.id, otherHand(hand), true);
+        startScale();
         return;
       }
       if (tap.count >= 3) {
@@ -299,7 +356,7 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       const pointed = bodyPointed(c);
       if (at && (pointed == null || at.distance <= raycaster.ray.origin.distanceTo(registry.get(pointed).mesh.current.getWorldPosition(_v))))
         takePanel(hand, c, at);
-      else if (pointed != null) takeBody(hand, c, pointed);
+      else if (pointed != null) takeBody(hand, c, pointed, true);
     };
 
     const gripEnd = (hand) => {
@@ -307,6 +364,12 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       if (tap) tap.tappedAt = tap.count < 3 && now - tap.pressedAt <= GRIP_TAP_S ? now : -Infinity; // (a short press: a tap, unless it ended a triple)
       const g = grabs.current[hand];
       delete grabs.current[hand];
+      if (g?.target === 'scale') {
+        // one grip let go: scaling's done, the other grip holds nothing now
+        scaling.current = null;
+        grabs.current[otherHand(hand)] = { target: 'none' };
+        return;
+      }
       if (g?.target === 'body') {
         holds.release(g.id, hand);
         return;
@@ -334,7 +397,7 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       // (an object another hand or a pointer took away isn't this hand's any more)
       if (g?.target === 'body' && !holds.isHeld(g.id, hand)) grabs.current[hand] = { target: 'none' };
       holding.current[hand] = Boolean(c && g && g.target !== 'none');
-      if (!c || !g || g.target === 'none') continue;
+      if (!c || !g || g.target === 'none' || g.target === 'scale') continue;
       if (g.target === 'panel' && !groupOf(g.key)) continue;
       const { x, y } = c.stick;
       // what's held: its pose in the hand, and the point it's held by, both shift in the grip's space

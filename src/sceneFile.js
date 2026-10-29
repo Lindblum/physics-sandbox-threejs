@@ -14,12 +14,12 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { CUBE_SIZE, DISC, SPHERE_RADIUS, lookMaterial, makeBody } from './Physics.jsx';
+import { DISC, lookMaterial, makeBody } from './Physics.jsx';
 import { DISC_MATERIAL, MATERIALS, materialById } from './materials.js';
+import { SHAPES, shapeOf } from './shapes.js';
 
 const FORMAT = 'physics-sandbox'; // the scene's extras: { format, version, gravity }
 const VERSION = 1;
-const SHAPES = ['cube', 'sphere'];
 
 const round = (v, digits = 5) => +v.toFixed(digits);
 const vector = (v) => [round(v.x), round(v.y), round(v.z)];
@@ -34,7 +34,7 @@ export async function saveScene({ bodies, registry, gravity }) {
   scene.name = 'Physics Sandbox';
   scene.userData = { format: FORMAT, version: VERSION, gravity, units: 'metres, Y up' };
 
-  const disc = new THREE.Mesh(new THREE.CylinderGeometry(DISC.radius, DISC.radius, DISC.thickness, 96), lookMaterial(DISC_MATERIAL, true));
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(DISC.radius, DISC.radius, DISC.thickness, 96), lookMaterial(DISC_MATERIAL, { transmission: true }));
   disc.name = 'Disc';
   disc.position.y = -DISC.thickness / 2;
   disc.userData = { sandbox_fixed: true, sandbox_material: DISC_MATERIAL.id, state: 'solid' };
@@ -49,19 +49,16 @@ export async function saveScene({ bodies, registry, gravity }) {
   sun.lookAt(0, 0, 0);
   scene.add(sun);
 
-  const geometry = {
-    cube: new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE),
-    sphere: new THREE.SphereGeometry(SPHERE_RADIUS, 48, 24),
-  };
   const looks = new Map();
   const count = new Map();
   for (const def of bodies) {
     const material = materialById(def.material);
-    if (!looks.has(material.id)) looks.set(material.id, lookMaterial(material, true));
-    const mesh = new THREE.Mesh(geometry[def.shape], looks.get(material.id));
+    if (!looks.has(material.id)) looks.set(material.id, lookMaterial(material, { transmission: true }));
+    const shape = shapeOf(def.shape);
+    const mesh = new THREE.Mesh(shape.geometry, looks.get(material.id));
     const n = (count.get(material.id) ?? 0) + 1;
     count.set(material.id, n);
-    mesh.name = `${material.name} ${def.shape} ${n}`;
+    mesh.name = `${material.name} ${shape.label} ${n}`;
     const b = registry.get(def.id)?.body.current;
     if (b) {
       mesh.position.copy(b.translation());
@@ -70,7 +67,7 @@ export async function saveScene({ bodies, registry, gravity }) {
       mesh.position.fromArray(def.position);
       mesh.rotation.fromArray(def.rotation);
     }
-    const volume = def.shape === 'cube' ? CUBE_SIZE ** 3 : (4 / 3) * Math.PI * SPHERE_RADIUS ** 3;
+    const volume = shape.volume;
     mesh.userData = {
       sandbox_shape: def.shape,
       sandbox_material: material.id,
@@ -87,7 +84,6 @@ export async function saveScene({ bodies, registry, gravity }) {
   }
 
   const glb = await new GLTFExporter().parseAsync(scene, { binary: true });
-  for (const g of Object.values(geometry)) g.dispose();
   disc.geometry.dispose();
   const stamp = new Date().toISOString().slice(0, 16).replace('T', '-').replace(':', '');
   download(new Blob([glb], { type: 'model/gltf-binary' }), `physics-sandbox-${stamp}.glb`);
@@ -132,7 +128,7 @@ export async function readScene(file) {
   gltf.scene.updateMatrixWorld(true);
   gltf.scene.traverse((o) => {
     const d = o.userData;
-    if (!SHAPES.includes(d?.sandbox_shape) || !MATERIALS.some((m) => m.id === d.sandbox_material)) return;
+    if (!SHAPES[d?.sandbox_shape] || !MATERIALS.some((m) => m.id === d.sandbox_material)) return;
     o.matrixWorld.decompose(_p, _q, _s);
     _e.setFromQuaternion(_q);
     const motion = {};

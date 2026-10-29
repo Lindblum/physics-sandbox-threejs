@@ -6,6 +6,7 @@
 
 import { XR_RESOLUTION } from './xrResolution.js';
 import { MATERIALS } from './materials.js';
+import { SHAPES } from './shapes.js';
 
 export const MENU_TITLE = 'Physics Sandbox';
 
@@ -13,13 +14,19 @@ export const MENU_TITLE = 'Physics Sandbox';
 export const MENU_TOGGLE = 'menu:toggle';
 export const VIEW_TOGGLE = 'view:toggle';
 export const TOOLS_TOGGLE = 'tools:toggle';
+/** Options' corner, the scene scale: pressed, back to real size. */
+export const SCALE_RESET = 'scale:reset';
 
-/** The tools, in the Tools dropdown: Select picks objects up; Cube and Sphere make one where you click. */
+/** The tools, in the Tools dropdown: Select picks objects up; each shape (see shapes.js) makes one where you click. */
 export const TOOLS = [
   { value: 'select', label: 'Select', icon: 'select' },
-  { value: 'cube', label: 'Cube', icon: 'shape' },
-  { value: 'sphere', label: 'Sphere', icon: 'sphere' },
+  ...Object.values(SHAPES).map((s) => ({ value: s.id, label: s.label, icon: s.id === 'cube' ? 'shape' : s.id === 'sphere' ? 'sphere' : `shape:${s.id}` })),
 ];
+
+/** The scene scale as shown: ×1 is real size. */
+export function scaleLabel(scale) {
+  return `×${scale >= 10 ? scale.toFixed(1) : scale >= 0.995 ? scale.toFixed(2) : scale.toFixed(3)}`;
+}
 
 /** The Material dropdown's choices: Random (a solid or liquid one each time), then the table's, in its order. */
 export const MATERIAL_CHOICES = [{ value: 'random', label: 'Random' }, ...MATERIALS.map((m) => ({ value: m.id, label: m.name }))];
@@ -27,18 +34,25 @@ export const MATERIAL_CHOICES = [{ value: 'random', label: 'Random' }, ...MATERI
 /**
  * The panels, one template for both renderers (the windowed one in App.jsx,
  * the XR one in XRMenuPanel.jsx), stacked top to bottom: each { id, toggle:
- * { id, icon, label }, title, status?, open, items, labels? } (items and
+ * { id, icon, label }, title, corner?, status?, open, items, labels? } (items and
  * labels: see menuItems, possibleLabels). Closed, a panel shows only its
- * toggle button, top left; open, the title beside it and its items beneath.
+ * toggle button, top left; open, the title beside it, `corner` ({ id,
+ * label, title, widest }: a small button) in the top-right corner, and its items beneath.
  *
- * Options: the gear, the title, the XR status line, the menu. `menu`: { open,
- * status, items, labels }.
+ * Options: the gear, the title, the scene scale, the XR status line, the
+ * menu. `menu`: { open, status, items, labels, scale }.
  */
-export function optionsPanel(menu) {
+export function optionsPanel({ scale, ...menu }) {
   return {
     id: 'options',
     toggle: { id: MENU_TOGGLE, icon: 'gear', label: menu.open ? 'Hide options' : 'Show options' },
     title: MENU_TITLE,
+    corner: {
+      id: SCALE_RESET,
+      label: scaleLabel(scale),
+      title: scale === 1 ? 'Scene scale: real size. In XR, hold both grips in mid-air and move your hands apart or together to scale it' : 'Scene scale. Press for real size',
+      widest: scaleLabel(0.051),
+    },
     ...menu,
   };
 }
@@ -199,7 +213,7 @@ export function menuItems(state, env) {
   return [
     group('file', 'File', 'file', ['save', 'open']),
     group('physics', 'Physics', 'gravity', ['gravity', 'simulation', 'sound', 'reset']),
-    group('video', 'Video', 'video', ['background', 'view', 'vsync', 'xrResolution']),
+    group('video', 'Video', 'video', ['background', 'view', 'reflections', 'vsync', 'xrResolution']),
     group('accessibility', 'Accessibility', 'accessibility', ['textSize', 'controllerGuide']),
   ];
 }
@@ -260,6 +274,12 @@ function settingsById(state, env) {
     },
     { id: 'reset', label: 'Reset Objects', icon: 'rotate', title: 'The ten starting cubes dropped onto the disc again; the objects made are cleared' },
     {
+      id: 'reflections',
+      label: `Reflections: ${state.reflections ? 'On' : 'Off'}`,
+      icon: state.reflections ? 'reflectionsOn' : 'reflectionsOff',
+      title: 'On: objects mirror their surroundings, metals most. Off: lit by the lights alone (faster)',
+    },
+    {
       id: 'vsync',
       label: `VSync: ${state.vsync ? 'On' : 'Off'}`,
       icon: state.vsync ? 'vsyncOn' : 'vsyncOff',
@@ -309,7 +329,7 @@ export function possibleLabels(env) {
   for (const flag of [false, true])
     for (const background of backgrounds)
       for (const view of env.views)
-        for (const item of Object.values(settingsById({ gravity: flag, paused: flag, sound: flag, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
+        for (const item of Object.values(settingsById({ gravity: flag, paused: flag, sound: flag, reflections: flag, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
           labels.add(item.label);
   // the sliders' widest values, and Controller Guide both ways
   labels.add(`Text Size: ${percent(TEXT_SIZE.max)}`);

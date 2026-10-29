@@ -20,6 +20,7 @@ import fileMultiple from 'lineicons/assets/svgs/regular/file-multiple.svg?raw';
 import volume from 'lineicons/assets/svgs/regular/volume-high.svg?raw';
 import volumeMute from 'lineicons/assets/svgs/regular/volume-mute.svg?raw';
 import palette from 'lineicons/assets/svgs/regular/colour-palette-3.svg?raw';
+import { SHAPES } from './shapes.js';
 
 // Lineicons ship with a fixed fill; recolour to follow the surrounding text
 // and size to the font.
@@ -192,6 +193,8 @@ const ICONS = {
   soundOn: recolour(volume),
   soundOff: recolour(volumeMute),
   material: recolour(palette),
+  reflectionsOn: recolour(sun),
+  reflectionsOff: recolour(sun).replace('</svg>', '<path d="M3.5 3.5 20.5 20.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'),
   edges,
   monitor,
   video,
@@ -212,6 +215,9 @@ const ICONS = {
   controllerGuideOn,
   controllerGuideOff,
 };
+
+// each shape's own, drawn from its edges (see shapes.js): "shape:<id>"
+for (const s of Object.values(SHAPES)) if (s.icon) ICONS[`shape:${s.id}`] = s.icon;
 
 /** An icon as a standalone SVG in a fixed colour, for drawing onto a canvas. */
 export function iconSvg(name, color = '#ffffff') {

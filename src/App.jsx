@@ -14,6 +14,7 @@ import {
   MENU_TOGGLE,
   PICK_PREFIX,
   MATERIAL_CHOICES,
+  SCALE_RESET,
   TOOLS,
   TOOLS_TOGGLE,
   VIEW_TOGGLE,
@@ -95,6 +96,15 @@ const toggleIn = (id) => (list) => (list.includes(id) ? list.filter((x) => x !==
 // Accessibility settings and XR Resolution are remembered in this browser
 const TOOLS_KEY = 'physics-sandbox.tools';
 const SOUND_KEY = 'physics-sandbox.sound';
+const REFLECTIONS_KEY = 'physics-sandbox.reflections';
+
+function loadReflections() {
+  try {
+    return JSON.parse(localStorage.getItem(REFLECTIONS_KEY)) !== false;
+  } catch {
+    return true;
+  }
+}
 
 function loadSound() {
   try {
@@ -162,6 +172,16 @@ function useViewerState() {
   const [keepXRPose, setKeepXRPose] = useState(false); // the XR session is starting again (XR Resolution)
   const [menuOpen, setMenuOpen] = useState(true); // shared by the windowed and XR panels
   const [tools, setTools] = useState(loadTools); // the Tools panel: { tool, material, open }, likewise
+  const [reflections, setReflections] = useState(loadReflections); // Options → Video → Reflections
+  useEffect(() => {
+    try {
+      localStorage.setItem(REFLECTIONS_KEY, JSON.stringify(reflections));
+    } catch {
+      // (not remembered)
+    }
+  }, [reflections]);
+  const [sceneScale, setSceneScale] = useState(1); // XR: both grips in mid-air scale it (see Grab.jsx)
+  const [scaleReset, setScaleReset] = useState(0); // counts presses of the scale, each one back to real size
   const [sound, setSound] = useState(loadSound); // Options → Physics → Sound
   useEffect(() => {
     setSoundOn(sound);
@@ -218,6 +238,9 @@ function useViewerState() {
       toggleGravity: () => setGravity((v) => !v),
       setGravity,
       toggleSound: () => setSound((v) => !v),
+      toggleReflections: () => setReflections((v) => !v),
+      setSceneScale,
+      resetScale: () => setScaleReset((n) => n + 1),
       setMaterial: (material) => setTools((t) => ({ ...t, material })),
       resetBodies: () => setBodies(startingBodies()),
       setTool: (tool) => setTools((t) => ({ ...t, tool })),
@@ -253,6 +276,9 @@ function useViewerState() {
     material: tools.material,
     toolsOpen: tools.open,
     sound,
+    reflections,
+    sceneScale,
+    scaleReset,
     background,
     passthrough: background === 'passthrough',
     screenView,
@@ -274,9 +300,8 @@ function useViewerState() {
 function useKeyboard(actions) {
   useEffect(() => {
     const keymap = {
-      Digit1: () => actions.setTool('select'),
-      Digit2: () => actions.setTool('cube'),
-      Digit3: () => actions.setTool('sphere'),
+      // 1 to 9, then 0: the tools in order
+      ...Object.fromEntries(TOOLS.slice(0, 10).map((t, i) => [`Digit${(i + 1) % 10}`, () => actions.setTool(t.value)])),
       KeyG: actions.toggleGravity,
       KeyP: actions.togglePause,
       KeyR: actions.resetBodies,
@@ -581,6 +606,11 @@ function Panel({ panel, onSelect, error, size, onResize, stretch }) {
       <header>
         {button}
         <h1>{panel.title}</h1>
+        {panel.corner && (
+          <button className="corner" onClick={() => onSelect(panel.corner.id)} title={panel.corner.title}>
+            {panel.corner.label}
+          </button>
+        )}
       </header>
 
       <div className="hud-body">
@@ -770,6 +800,8 @@ export default function App() {
       );
     else if (id === 'controllerGuide') actions.toggleControllerGuide();
     else if (id === 'vsync') actions.toggleVSync();
+    else if (id === 'reflections') actions.toggleReflections();
+    else if (id === SCALE_RESET) actions.resetScale();
   };
   const slideTo = (id, value) => {
     if (id === 'textSize') actions.setTextSize(value);
@@ -797,7 +829,7 @@ export default function App() {
   const labels = useMemo(() => possibleLabels({ passthroughAvailable, views }), [passthroughAvailable, views]);
   // the panels' template, shared by the windowed and XR renderers; the View
   // panel only where a headset can be used
-  const panels = { options: optionsPanel({ open: state.menuOpen, status, items, labels }), view: views.includes('hmd') ? viewPanel(inXR) : null, tools };
+  const panels = { options: optionsPanel({ open: state.menuOpen, status, items, labels, scale: state.sceneScale }), view: views.includes('hmd') ? viewPanel(inXR) : null, tools };
   const leftPanels = [panels.options, ...(panels.view ? [panels.view] : [])];
 
   return (
@@ -814,6 +846,8 @@ export default function App() {
               bodies={state.bodies}
               setBodies={actions.setBodies}
               registry={registry}
+              onScale={actions.setSceneScale}
+              resetScale={state.scaleReset}
             />
           </Suspense>
         </XR>
