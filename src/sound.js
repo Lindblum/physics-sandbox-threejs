@@ -23,28 +23,48 @@ let volume = 1; // Options → Accessibility → Volume: 0 (off) to 1
 let impacts = 0;
 const scrapes = new Map(); // key -> voice
 
-/** Starts the sound when the page is first touched (browsers wait for that); later touches wake it if it was suspended. */
+/**
+ * Starts the sound (browsers wait for a touch, a click or a key), or wakes it
+ * if it was suspended (a headset's browser may suspend it as an XR session
+ * starts: see wakeSoundInXR).
+ */
+function wake() {
+  if (!ctx) {
+    const AudioContext = window.AudioContext ?? window.webkitAudioContext;
+    if (!AudioContext) return;
+    ctx = new AudioContext({ latencyHint: 'interactive' });
+    const compressor = ctx.createDynamicsCompressor();
+    compressor.threshold.value = -12;
+    compressor.ratio.value = 6;
+    compressor.connect(ctx.destination);
+    master = ctx.createGain();
+    master.gain.value = volume;
+    master.connect(compressor);
+    // two seconds of white noise, played from random places
+    noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+    const data = noise.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  }
+  if (ctx.state !== 'running') ctx.resume().catch(() => {});
+}
+
+/** The sound starts when the page is first touched; later touches wake it if it was suspended. */
 export function initSound() {
-  const wake = () => {
-    if (!ctx) {
-      const AudioContext = window.AudioContext ?? window.webkitAudioContext;
-      if (!AudioContext) return;
-      ctx = new AudioContext({ latencyHint: 'interactive' });
-      const compressor = ctx.createDynamicsCompressor();
-      compressor.threshold.value = -12;
-      compressor.ratio.value = 6;
-      compressor.connect(ctx.destination);
-      master = ctx.createGain();
-      master.gain.value = volume;
-      master.connect(compressor);
-      // two seconds of white noise, played from random places
-      noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
-      const data = noise.getChannelData(0);
-      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-    }
-    if (ctx.state === 'suspended') ctx.resume();
-  };
   for (const type of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(type, wake, { capture: true });
+}
+
+/**
+ * In an XR session the page gets no touches or clicks: the controllers'
+ * presses (select, squeeze) wake the sound instead, and it's woken as the
+ * session starts. Returns a function that stops listening.
+ */
+export function wakeSoundInXR(session) {
+  const types = ['selectstart', 'squeezestart', 'select'];
+  for (const type of types) session.addEventListener(type, wake);
+  wake();
+  return () => {
+    for (const type of types) session.removeEventListener(type, wake);
+  };
 }
 
 const running = () => (ctx?.state === 'running' && volume > 0 ? ctx : null);

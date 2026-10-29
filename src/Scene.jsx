@@ -1,7 +1,7 @@
 import { Component, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useLoader, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import { IfInSessionMode, XROrigin, useXR, useXRControllerLocomotion } from '@react-three/xr';
+import { IfInSessionMode, XROrigin, useXR } from '@react-three/xr';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { CameraBackground, CardboardRig } from './Cardboard.jsx';
@@ -43,6 +43,9 @@ class AssetBoundary extends Component {
 // top is the floor you stand on
 const LOOK_AT = [0, 0.15, 0];
 const XR_START = [0, 0, 1.5];
+// the window's camera, as App.jsx's Canvas starts it
+const WINDOW_START = [0, 1.1, 1.9];
+const WINDOW_FOV = 60;
 const ENVIRONMENT_INTENSITY = 0.5; // the studio's light on the objects, besides the sun's (fuller, it washes them out)
 const GRAVITY = [0, -9.81, 0];
 const NO_GRAVITY = [0, 0, 0];
@@ -166,6 +169,42 @@ function Lights({ shadows }) {
   );
 }
 
+/**
+ * Out of XR: the window's view as it was. While presenting, three.js copies
+ * the headset's pose and projection (and the player's size) onto the scene's
+ * camera, and nothing puts them back, so the window would go on showing the
+ * last of the headset's view (or nothing). The camera goes back to where it
+ * starts, square, its projection the window's; the renderer to the window's size.
+ */
+function RestoreViewAfterXR() {
+  const session = useXR((s) => s.session);
+  const camera = useThree((s) => s.camera);
+  const gl = useThree((s) => s.gl);
+  const size = useThree((s) => s.size);
+  const invalidate = useThree((s) => s.invalidate);
+  const was = useRef(null);
+  useEffect(() => {
+    const ended = was.current && !session;
+    was.current = session;
+    if (!ended) return;
+    camera.matrixAutoUpdate = true;
+    camera.position.fromArray(WINDOW_START);
+    camera.scale.set(1, 1, 1);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(...LOOK_AT);
+    if (camera.isPerspectiveCamera) {
+      camera.fov = WINDOW_FOV;
+      camera.aspect = size.width / size.height;
+      camera.zoom = 1;
+    }
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld(true);
+    gl.setSize(size.width, size.height, false);
+    invalidate();
+  }, [session, camera, gl, size, invalidate]);
+  return null;
+}
+
 /** Gravity turned back on (or off): everything asleep wakes, to fall (or float). */
 function WakeOnGravity({ gravity }) {
   const { world } = useRapier();
@@ -175,25 +214,26 @@ function WakeOnGravity({ gravity }) {
   return null;
 }
 
-const _head = new THREE.Vector3();
 const _yAxis = new THREE.Vector3(0, 1, 0);
 const _hand = new THREE.Vector3();
 
 /**
- * Left thumbstick moves, right thumbstick turns smoothly about the head,
- * except while that hand's grip holds something (its stick is then the
- * grip's). The grip buttons pick up the objects, or carry, dock and undock
+ * Left thumbstick moves (the way the left controller points), right thumbstick
+ * turns smoothly about the head, except while that hand's grip holds something
+ * (its stick is then the grip's) or, pressed in, it works the panels
+ * (`menus`, `onSelect`, `onFocus`: see Grab.jsx). The grip buttons pick up the objects, or carry, dock and undock
  * the panels, or both in mid-air scale the scene (see Grab.jsx); the panels
  * travel with the player. `origin`: ref to the XR origin, whose scale is the
  * player's size (the scene scale's inverse); `onScale(scale)` hears it
  * change; `resetScale` changing puts it back to real size, where you stand.
  */
-function Player({ origin, panels, registry, holds, textSize, homeScale, onScale, onResize, resetScale, placing, onPlace, surfaces, previews, children }) {
+function Player({ origin, panels, registry, holds, textSize, homeScale, onScale, onResize, resetScale, placing, onPlace, surfaces, previews, menus, onSelect, onFocus, children }) {
   const left = useRef(null);
   const right = useRef(null);
   const probes = useMemo(() => ({ left, right }), []);
   const gl = useThree((s) => s.gl);
-  const holding = useControllerGrips({
+  // (the sticks move and turn the player, or work the panels: see Grab.jsx)
+  useControllerGrips({
     panels,
     origin,
     registry,
@@ -208,6 +248,9 @@ function Player({ origin, panels, registry, holds, textSize, homeScale, onScale,
     onPlace,
     surfaces,
     previews,
+    menus,
+    onSelect,
+    onFocus,
   });
   // back to real size: the floor the real floor again, your head where it was over it
   useEffect(() => {
@@ -221,27 +264,6 @@ function Player({ origin, panels, registry, holds, textSize, homeScale, onScale,
     o.position.y = 0;
     onScale(1);
   }, [resetScale]); // eslint-disable-line react-hooks/exhaustive-deps
-  useXRControllerLocomotion(
-    (velocity, turn, delta, state) => {
-      const o = origin.current;
-      if (!o) return;
-      // (as fast for your size whatever the scene's scale)
-      if (!holding.current.left) o.position.addScaledVector(velocity, delta * o.scale.x);
-      turn = -turn; // (the stick pushed right turns you right)
-      if (!turn || holding.current.right) return;
-      // swing the origin around the head so turning doesn't move the viewer
-      state.camera.getWorldPosition(_head);
-      const dx = o.position.x - _head.x;
-      const dz = o.position.z - _head.z;
-      const c = Math.cos(turn);
-      const s = Math.sin(turn);
-      o.position.x = _head.x + dx * c + dz * s;
-      o.position.z = _head.z - dx * s + dz * c;
-      o.rotation.y += turn;
-    },
-    { speed: 1.5 },
-    { type: 'smooth', speed: 1.5 },
-  );
   return (
     <XROrigin ref={origin} position={XR_START}>
       <Probes probes={probes} />
@@ -584,6 +606,10 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   const toolsPanel = useRef(null);
   const panelRefs = useMemo(() => ({ menu: menuPanel, view: viewPanel, tools: toolsPanel }), []);
   const { options, view, tools } = panels;
+  // the panels' templates by dock key, for the sticks, and what they've lit in each
+  const menus = useRef(null);
+  menus.current = { menu: options, view, tools };
+  const [stickFocus, setStickFocus] = useState({});
   return (
     <>
       {cameraPassthrough && !cameraFailed ? (
@@ -598,6 +624,7 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
         <Backdrop background={state.background} />
       )}
       <FramePacing seeThrough={false} vsync={state.vsync} />
+      <RestoreViewAfterXR />
       {state.view === 'sbs' && !immersive && <SideBySide />}
       {state.view === 'interlaced' && !immersive && <Interlaced />}
       {phoneStereo && <PhoneStereoXR />}
@@ -641,15 +668,18 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
         onPlace={onPlace}
         surfaces={surfaces}
         previews={previews}
+        menus={menus}
+        onSelect={onSelect}
+        onFocus={setStickFocus}
         panels={panelRefs}
         registry={registry}
         holds={holds}
         textSize={state.textSize}
         homeScale={phone && state.stereo ? PHONE_STEREO_MENU_SCALE : 1}
       >
-        {immersive && !menuOverlay && <XRPanel panel={options} onSelect={onSelect} groupRef={menuPanel} />}
-        {inSession && view && <XRPanel panel={view} onSelect={onSelect} groupRef={viewPanel} />}
-        {inSession && <XRPanel panel={tools} onSelect={onSelect} groupRef={toolsPanel} />}
+        {immersive && !menuOverlay && <XRPanel panel={options} onSelect={onSelect} groupRef={menuPanel} focusKey={stickFocus.menu} />}
+        {inSession && view && <XRPanel panel={view} onSelect={onSelect} groupRef={viewPanel} focusKey={stickFocus.view} />}
+        {inSession && <XRPanel panel={tools} onSelect={onSelect} groupRef={toolsPanel} focusKey={stickFocus.tools} />}
       </Player>
       {inSession && hasControllers && state.controllerGuide && <ControllerGuide textSize={state.textSize} />}
       {immersive && !hasControllers && <GazeReticle />}

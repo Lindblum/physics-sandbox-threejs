@@ -9,7 +9,7 @@ import { XR_RESOLUTION, setXRViewportScale } from './xrResolution.js';
 import { CardboardOverlay, canUseCardboard, enterCardboard, exitCardboard } from './Cardboard.jsx';
 import { startingBodies } from './Physics.jsx';
 import { openScene, saveScene } from './sceneFile.js';
-import { initSound, setVolume } from './sound.js';
+import { initSound, setVolume, wakeSoundInXR } from './sound.js';
 import { setVibration } from './grip.js';
 import {
   MENU_TOGGLE,
@@ -716,6 +716,11 @@ export default function App() {
   useEffect(() => {
     if (!sessionActive) actions.setXRResolutionActive(null);
   }, [sessionActive, actions]);
+  // in XR the controllers' presses wake the sound (the page gets no clicks there)
+  useEffect(() => {
+    const session = sessionActive && store.getState().session;
+    return session ? wakeSoundInXR(session) : undefined;
+  }, [sessionActive]);
 
   /**
    * XR Resolution let go at a new value during a session: the session ends

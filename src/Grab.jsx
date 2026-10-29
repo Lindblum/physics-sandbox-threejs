@@ -2,6 +2,7 @@ import { useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { pulse, readControllers } from './grip.js';
+import { focusables, slideEndId, slideId } from './menu.js';
 import { distanceOutside as shapeDistance, restingPosition } from './shapes.js';
 import { transformMatrix } from './Physics.jsx';
 
@@ -24,13 +25,21 @@ import { transformMatrix } from './Physics.jsx';
 // along that line (the line when the trigger was pressed), stretching it.
 // Let go of either grip and its new size is its own (its collider too).
 //
+// The sticks: the left moves the player, the way the left controller points
+// (level with the floor), the right turns them about their head. Pressed in
+// (L3 / R3), a stick switches to the panels docked on its controller (its
+// probe turns blue): up and down go through their buttons, settings and
+// choices (left and right set a slider), A / X presses the one lit, B / Y
+// goes up a level (closes the dropdown or group it's in). Pressed again,
+// back to moving.
+//
 // With a shape tool (or Paste) in hand, each controller shows a wireframe of
 // what it would make: on the surface its ray points at (turned the way it
 // points), or, pointing at nothing, round its probe (turned as the hand is).
 // Its trigger makes it there.
 //
 // The panels dock on a controller, stacked upward, tipped toward the eyes:
-// Options on the left, the View panel and the Tools panel above it on the
+// the View panel and Options above it on the left, the Tools panel on the
 // right. A grip pressed while that controller points at a panel, or touches it,
 // takes the panel off its dock and holds it rigidly; let go near the other
 // controller it docks there, anywhere else it stays put (travelling with the
@@ -68,7 +77,7 @@ const PULSE = { grab: [0.6, 50], detach: [0.4, 30], dock: [0.9, 80], zone: [0.25
 /** Docked on one controller, the panels stand stacked upward in this order (the first nearest it). */
 const DOCK_STACK = ['view', 'tools', 'menu'];
 /** Where each panel docks at first. */
-const FIRST_DOCK = { menu: 'left', view: 'right', tools: 'right' };
+const FIRST_DOCK = { menu: 'left', view: 'left', tools: 'right' };
 // in the controller's pointing frame (-Z forward, +Y up): the stack stands on
 // its hand's anchor, the first panel's button over the controller, its faces
 // tipped up toward the eyes. On the left hand: 1 cm left, 6 cm up, 2 cm back,
@@ -94,6 +103,12 @@ const REEL_MIN_M = 0.05; // reeled in no nearer the hand than this
 const ROLL_RATE = Math.PI; // radians per second at full tilt
 // scaling the scene
 export const SCENE_SCALE = { min: 0.05, max: 20 }; // how small and big the scene gets
+// the sticks
+const MOVE_SPEED = 1.5; // m/s at full tilt (at the player's size)
+const TURN_SPEED = 1.5; // rad/s at full tilt
+const MENU_TILT = 0.6; // a stick tilted this far steps through a panel...
+const MENU_REPEAT = [0.4, 0.12]; // ...again after this long held, then this often
+export const PROBE_MENU_COLOR = '#3a8dde'; // a probe whose stick works the panels
 const SCALE_JOIN_S = 0.3; // the second grip this soon after the first, which took an object it pointed at, still scales (and drops it)
 // resizing an object with both hands
 const RESIZE = { min: 0.2, max: 10 }; // how much smaller or bigger than made (on average) an object gets
@@ -162,11 +177,31 @@ function distanceOutside(entry, p) {
  * `placing`: a ref to what a shape tool or Paste would make (Scene.jsx
  * placingSpec, or null), `onPlace(spec, position, quaternion)` makes it,
  * `surfaces()` the meshes it can rest on, `previews` { left, right } refs to
- * the controllers' wireframes of it.
+ * the controllers' wireframes of it; `menus`: a ref to the panels' templates
+ * ({ menu, view, tools }, see menu.js), `onSelect(id)` their buttons, and
+ * `onFocus({ menu, view, tools })` hears what the sticks have focused in each.
  * Returns a ref to which hands' grips hold something now ({ left, right }),
  * whose sticks are then theirs, not the player's.
  */
-export function useControllerGrips({ panels, origin, registry, holds, probes, textSize, home, homeScale, onScale, onResize, placing, onPlace, surfaces, previews }) {
+export function useControllerGrips({
+  panels,
+  origin,
+  registry,
+  holds,
+  probes,
+  textSize,
+  home,
+  homeScale,
+  onScale,
+  onResize,
+  placing,
+  onPlace,
+  surfaces,
+  previews,
+  menus,
+  onSelect,
+  onFocus,
+}) {
   const gl = useThree((s) => s.gl);
   // hand -> { target: 'body', id, offset, point, byRay, at } | { target: 'panel', key, offset, point, size, grow, zone } | { target: 'scale' } | { target: 'resize', id } | { target: 'none' }
   const grabs = useRef({});
@@ -176,6 +211,12 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
   // { position, quaternion (the body's), transform (Matrix3: its resizing), tips: { left, right } (probes, world), grips: { left, right } (quaternions) }
   const resizing = useRef(null);
   const triggered = useRef({}); // hand -> its trigger was held last frame
+  const buttons = useRef({}); // hand -> { stickPress, primary, secondary } last frame
+  const menuMode = useRef({}); // hand -> its stick works the panels
+  const focus = useRef({}); // hand -> { key, id }: what its stick has lit
+  const steps = useRef({}); // `${hand}:${axis}` -> { dir, next }: a stick held over, stepping again
+  const sliding = useRef({}); // hand -> the slider its stick moved (let go: its slideEnd)
+  const reportedFocus = useRef('');
   const docks = useRef(Object.fromEntries(Object.entries(FIRST_DOCK).map(([key, hand]) => [key, { dock: hand }]))); // key -> { dock: hand | null, on, fly }
   const taps = useRef({}); // hand -> { pressedAt, tappedAt, count }
   const pressed = useRef({});
@@ -622,6 +663,117 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
         onPlace(spec, position, quaternion);
         buzz(hand, PULSE.grab);
       }
+    }
+
+    // the sticks: moving and turning, or (pressed in) working the panels
+    const pressedNow = (hand, button) => {
+      const c = controllers[hand];
+      const was = buttons.current[hand]?.[button];
+      return Boolean(c?.[button] && !was);
+    };
+    /** A stick held over along `axis` (-1, 0, 1): 1 or -1 when it steps (at once, then again while held), else 0. */
+    const step = (hand, axis, value) => {
+      const key = `${hand}:${axis}`;
+      const dir = value > MENU_TILT ? 1 : value < -MENU_TILT ? -1 : 0;
+      const s = (steps.current[key] ??= { dir: 0, next: 0 });
+      if (dir !== s.dir) {
+        s.dir = dir;
+        s.next = now + MENU_REPEAT[0];
+        return dir;
+      }
+      if (dir && now >= s.next) {
+        s.next = now + MENU_REPEAT[1];
+        return dir;
+      }
+      return 0;
+    };
+    for (const hand of HANDS) {
+      const c = controllers[hand];
+      if (pressedNow(hand, 'stickPress')) {
+        menuMode.current[hand] = !menuMode.current[hand];
+        buzz(hand, menuMode.current[hand] ? PULSE.dock : PULSE.detach);
+      }
+      const probe = probes[hand]?.current;
+      probe?.material.color.set(menuMode.current[hand] ? PROBE_MENU_COLOR : PROBE_COLOR);
+      if (!c || !menuMode.current[hand] || holding.current[hand]) {
+        if (!menuMode.current[hand]) focus.current[hand] = null;
+        continue;
+      }
+      // the panels docked on this controller, top to bottom as they stand (or, none docked there, every one shown)
+      const mine = DOCK_STACK.filter((key) => docks.current[key]?.on === hand && groupOf(key) && isShown(groupOf(key))).reverse();
+      const keys = mine.length ? mine : shownPanels();
+      const list = keys.flatMap((key) => (menus?.current[key] ? focusables(menus.current[key]).map((f) => ({ ...f, key })) : []));
+      if (!list.length) continue;
+      const f = focus.current[hand];
+      let i = Math.max(0, list.findIndex((x) => x.key === f?.key && x.id === f?.id));
+      const dy = step(hand, 'y', c.stick.y); // (down: on through the list)
+      if (dy) {
+        i = THREE.MathUtils.clamp(i + dy, 0, list.length - 1);
+        buzz(hand, PULSE.zone);
+      }
+      const at = list[i];
+      const dx = step(hand, 'x', c.stick.x);
+      if (dx && at.slider) {
+        const { min, max, step: by, value } = at.slider;
+        const v = THREE.MathUtils.clamp(+(value + dx * by).toFixed(4), min, max);
+        if (v !== value) {
+          onSelect?.(slideId(at.id, v));
+          sliding.current[hand] = at.id;
+          buzz(hand, PULSE.zone);
+        }
+      }
+      // (a slider let go: its change is done, as when a pointer lets go of it)
+      if (!c.stick.x && sliding.current[hand]) {
+        onSelect?.(slideEndId(sliding.current[hand]));
+        sliding.current[hand] = null;
+      }
+      if (pressedNow(hand, 'primary') && !at.slider) {
+        onSelect?.(at.id);
+        buzz(hand, PULSE.grab);
+      }
+      let lit = at;
+      if (pressedNow(hand, 'secondary') && at.parent) {
+        // up a level: the group or dropdown it's in closes, and is lit
+        onSelect?.(at.parent);
+        lit = { key: at.key, id: at.parent };
+        buzz(hand, PULSE.detach);
+      }
+      focus.current[hand] = { key: lit.key, id: lit.id };
+    }
+    for (const hand of HANDS) {
+      const c = controllers[hand];
+      buttons.current[hand] = { stickPress: c?.stickPress, primary: c?.primary, secondary: c?.secondary };
+    }
+    // what's lit in each panel, told when it changes
+    const lit = {};
+    for (const hand of HANDS) if (focus.current[hand]) lit[focus.current[hand].key] = focus.current[hand].id;
+    const litKey = JSON.stringify(lit);
+    if (litKey !== reportedFocus.current) {
+      reportedFocus.current = litKey;
+      onFocus?.(lit);
+    }
+    // moving, the way the left controller points (level), and turning about the head
+    const lc = controllers.left;
+    if (o && lc && !holding.current.left && !menuMode.current.left && (lc.stick.x || lc.stick.y)) {
+      const forward = _v.copy(lc.ray.direction).setY(0);
+      if (forward.lengthSq() > 1e-6) {
+        forward.normalize();
+        const right = _axis.crossVectors(forward, _up);
+        o.position.addScaledVector(forward, -lc.stick.y * MOVE_SPEED * dt * k).addScaledVector(right, lc.stick.x * MOVE_SPEED * dt * k);
+      }
+    }
+    const rc = controllers.right;
+    if (o && rc && !holding.current.right && !menuMode.current.right && rc.stick.x) {
+      // (pushed right: turned right) about the head, so the view turns where it is
+      const turn = -rc.stick.x * TURN_SPEED * dt;
+      gl.xr.getCamera().getWorldPosition(_pos);
+      const dx = o.position.x - _pos.x;
+      const dz = o.position.z - _pos.z;
+      const cos = Math.cos(turn);
+      const sin = Math.sin(turn);
+      o.position.x = _pos.x + dx * cos + dz * sin;
+      o.position.z = _pos.z - dx * sin + dz * cos;
+      o.rotation.y += turn;
     }
 
     // the probes: at each controller's tip; a tap as one comes onto an object, a hum while it's in one

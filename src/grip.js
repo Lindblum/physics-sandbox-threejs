@@ -5,6 +5,9 @@ import * as THREE from 'three';
 
 const TRIGGER = 0; // xr-standard gamepad button indices
 const SQUEEZE = 1;
+const STICK_PRESS = 3; // (L3 / R3)
+const PRIMARY = 4; // A / X
+const SECONDARY = 5; // B / Y
 const STICK_DEAD = 0.2; // thumbstick tilt ignored below this
 
 let vibration = 1; // Options → Accessibility → Vibration: every pulse's strength times this (0: off; up to 2)
@@ -29,7 +32,8 @@ export function pulse(gamepad, intensity, ms) {
 
 /**
  * Each controller's state in world space: { grip (Matrix4), position, ray,
- * rayMatrix (its pointing frame: -Z along the ray), squeeze, trigger, stick ({ x:
+ * rayMatrix (its pointing frame: -Z along the ray), squeeze, trigger, stickPress (L3 / R3),
+ * primary (A / X), secondary (B / Y), stick ({ x:
  * right, y: down }, 0 inside the dead zone), gamepad }, keyed by hand. Poses come relative to the XR origin,
  * which locomotion moves, so they're carried through its world matrix.
  */
@@ -64,6 +68,9 @@ export function readControllers(frame, referenceSpace, origin) {
       stick: { x: axis(0), y: axis(1) },
       squeeze: Boolean(source.gamepad.buttons[SQUEEZE]?.pressed),
       trigger: Boolean(source.gamepad.buttons[TRIGGER]?.pressed),
+      stickPress: Boolean(source.gamepad.buttons[STICK_PRESS]?.pressed),
+      primary: Boolean(source.gamepad.buttons[PRIMARY]?.pressed),
+      secondary: Boolean(source.gamepad.buttons[SECONDARY]?.pressed),
       gamepad: source.gamepad,
     };
     gamepads[source.handedness] = source.gamepad;

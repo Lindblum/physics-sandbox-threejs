@@ -229,12 +229,13 @@ function PanelSlab({ w, h }) {
 }
 
 /**
- * `panel`: a panel of the template (see menu.js), `onSelect(id)` for its buttons. Its
+ * `panel`: a panel of the template (see menu.js), `onSelect(id)` for its buttons,
+ * `focusKey`: the control a thumbstick has focused (see Grab.jsx), if any. Its
  * group's userData.bounds is its visible panel in the group's metres ({
  * left, right, top, bottom, button: the toggle button's centre }), for
  * docking and stacking it (see Grab.jsx), which also places the group.
  */
-export function XRPanel({ panel, onSelect, groupRef }) {
+export function XRPanel({ panel, onSelect, groupRef, focusKey }) {
   const { toggle, title, status, items, labels, open, corner } = panel;
   const mesh = useRef(null);
   const [pointerKey, setPointerKey] = useState(null);
@@ -298,7 +299,14 @@ export function XRPanel({ panel, onSelect, groupRef }) {
   }, [canvas]);
   useEffect(() => () => texture.dispose(), [texture]);
 
-  const hovered = gazeKey ?? pointerKey;
+  // (`focusKey`: what a thumbstick has focused in it, see Grab.jsx: lit as if pointed at, and scrolled into view)
+  const hovered = focusKey ?? gazeKey ?? pointerKey;
+  useEffect(() => {
+    const r = focusKey && rects.find((q) => q.id === focusKey);
+    if (!r || !scrollable || r === rects[0]) return;
+    if (r.y - scrollTop < viewTop) scrollTo(r.y - viewTop);
+    else if (r.y + r.h - scrollTop > viewBottom) scrollTo(r.y + r.h - viewBottom);
+  }, [focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const ctx = canvas.getContext('2d');
     const redraw = () => setIconsLoaded((n) => n + 1);

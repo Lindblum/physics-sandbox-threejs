@@ -195,6 +195,27 @@ function dropdown(state, id, choices, current) {
   };
 }
 
+/**
+ * What can be focused in `panel` (for the thumbsticks: see Grab.jsx), top to
+ * bottom as drawn: its toggle button, and open, its items, the settings of
+ * its open groups and the choices of its open dropdowns, each { id, parent
+ * (the open group or dropdown it's in, or null), slider? }. Disabled ones are skipped.
+ */
+export function focusables(panel) {
+  const out = [{ id: panel.toggle.id, parent: null }];
+  if (!panel.open) return out;
+  const walk = (items, parent) => {
+    for (const item of items) {
+      if (item.disabled) continue;
+      out.push({ id: item.id, parent, slider: item.slider });
+      if (item.dropdown?.open) for (const option of item.dropdown.options) if (!option.disabled) out.push({ id: option.id, parent: item.id });
+      if (item.group?.open) walk(item.group.items, item.id);
+    }
+  };
+  walk(panel.items, null);
+  return out;
+}
+
 /** Every setting in `items`, the ones inside groups included. */
 export function settingItems(items) {
   return items.flatMap((item) => (item.group ? item.group.items : [item]));

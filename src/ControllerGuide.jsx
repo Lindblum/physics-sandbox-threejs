@@ -16,8 +16,20 @@ const HANDS = ['left', 'right'];
 const GRIP = 'Hold: pick up what the probe\ntouches or you point at, or a menu\nOn what the other holds: turn, resize\nBoth in mid-air: scale the scene\nTap twice: dock / undock\nTap 3 times: menus here';
 const TRIGGER = 'Point and press\nSelect: drag an object\nA shape: make one\nResizing: stretch along the hands\' line';
 const TEXTS = {
-  left: { 'xr-standard-trigger': TRIGGER, 'xr-standard-squeeze': GRIP, 'xr-standard-thumbstick': 'Move\nGripping: push / pull, roll' },
-  right: { 'xr-standard-trigger': TRIGGER, 'xr-standard-squeeze': GRIP, 'xr-standard-thumbstick': 'Turn\nGripping: push / pull, roll' },
+  left: {
+    'xr-standard-trigger': TRIGGER,
+    'xr-standard-squeeze': GRIP,
+    'xr-standard-thumbstick': 'Move (where it points)\nPress: this hand\'s menus / back\nGripping: push / pull, roll',
+    'x-button': 'In menus: choose',
+    'y-button': 'In menus: back a level',
+  },
+  right: {
+    'xr-standard-trigger': TRIGGER,
+    'xr-standard-squeeze': GRIP,
+    'xr-standard-thumbstick': 'Turn\nPress: this hand\'s menus / back\nGripping: push / pull, roll',
+    'a-button': 'In menus: choose',
+    'b-button': 'In menus: back a level',
+  },
 };
 /** The components labelled, in the columns' order (top to bottom). */
 const COMPONENTS = ['menu', 'y-button', 'b-button', 'x-button', 'a-button', 'xr-standard-thumbstick', 'xr-standard-trigger', 'xr-standard-squeeze'];

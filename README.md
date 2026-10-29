@@ -83,8 +83,9 @@ Options → File → Save Scene downloads a `.glb` (glTF 2.0): the disc, every o
 | Scale the scene | | Both grips in mid-air: hands apart / together, turn them |
 | Turn / resize an object | | Hold it, grip it with the other probe too; a trigger: stretch along the hands' line |
 | Held object | | Thumbstick up / down pushes it away / reels it in, left / right rolls it |
-| Orbit / zoom, move | Drag / scroll | Walk; left stick moves, right stick turns |
-| Panels | `Enter` / `Esc` toggles Options; `1` … `9`, `0` tools, `G` gravity, `P` pause, `M` mute, `R` reset | Options docks on the left controller, View and Tools on the right; hold a grip on a panel to move it, tap twice to dock / undock, three times to bring them all |
+| Orbit / zoom, move | Drag / scroll | Walk; left stick moves (the way the left controller points), right stick turns |
+| Menus by stick | | Press a stick in (L3 / R3): it works the panels docked on its controller (its probe turns blue): up / down through them, left / right sets a slider, A / X chooses, B / Y goes back a level; press it again to move |
+| Panels | `Enter` / `Esc` toggles Options; `1` … `9`, `0` tools, `G` gravity, `P` pause, `M` mute, `R` reset | View and Options dock on the left controller, Tools on the right; hold a grip on a panel to move it, tap twice to dock / undock, three times to bring them all |
 
 ## Layout
 
