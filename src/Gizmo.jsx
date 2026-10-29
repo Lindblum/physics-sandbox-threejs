@@ -15,7 +15,7 @@ const AXES = [
   { axis: new THREE.Vector3(0, 1, 0), color: '#4ade5a' },
   { axis: new THREE.Vector3(0, 0, 1), color: '#4a8cff' },
 ];
-const HANDLE_M = 0.014; // a cube's edge, life size (bigger further off, as the labels are)
+const HANDLE_M = 0.02; // a cube's edge, life size (bigger further off, as the labels are)
 const BEYOND_M = 0.03; // how far past the object's side its cube sits
 const STRETCH = { min: 0.2, max: 10 }; // how much shorter or longer one drag makes it
 const GIZMO = 'gizmo'; // who holds an object being stretched (see Holds)
@@ -172,6 +172,7 @@ export function AxisGizmo({ selected, registry, holds, onResize, viewScale }) {
             geometry={handleGeometry}
             material={handleMaterials[i]}
             renderOrder={999}
+            userData={{ gizmo: true }}
             // (not pointed at while hidden)
             raycast={function (raycaster, hits) {
               if (group.current?.visible) THREE.Mesh.prototype.raycast.call(this, raycaster, hits);

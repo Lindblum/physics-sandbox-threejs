@@ -48,6 +48,8 @@ const XR_START = [0, 0, 1.5];
 const WINDOW_START = [0, 1.1, 1.9];
 const WINDOW_FOV = 60;
 const ENVIRONMENT_INTENSITY = 0.5; // the studio's light on the objects, besides the sun's (fuller, it washes them out)
+const SKY_REFLECTION = 4; // how much brighter the sky is in reflections than behind (the stars are dim)
+const SKY_ENVIRONMENT_INTENSITY = 0.7; // the sky's (and its lights') light on the objects
 const GRAVITY = [0, -9.81, 0];
 const NO_GRAVITY = [0, 0, 0];
 // Without controllers (gaze, phones) the XR panel stands at waist height,
@@ -121,32 +123,61 @@ function Backdrop({ background }) {
 }
 
 /**
- * What the objects reflect (the metals most): a neutral studio, whatever is
- * behind them (the star sky is too dark to mirror: metals and mercury would
- * look black in it, and stars look wrong against passthrough or a solid
- * colour). Video → Reflections off: nothing (only the lights light them; faster).
+ * What the objects reflect (the metals and the glassy ones most). With the
+ * skybox behind: the sky, brightened (the stars alone are too dark to mirror:
+ * metals and mercury would look black in it), with a studio's lights in it for
+ * highlights. With passthrough or a solid colour behind, the stars would look
+ * wrong: a neutral studio instead. Video → Reflections off: nothing (only the
+ * lights light them; faster).
  */
-function Environment({ reflections }) {
+function Environment({ reflections, sky }) {
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
   // (made and disposed in the one effect: made in a memo, React's dev double run would dispose it and keep using it)
   useEffect(() => {
     if (!reflections) return;
-    const pmrem = new THREE.PMREMGenerator(gl);
-    const room = new RoomEnvironment();
-    const target = pmrem.fromScene(room, 0.04);
-    room.dispose();
-    pmrem.dispose();
-    scene.environment = target.texture;
-    scene.environmentIntensity = ENVIRONMENT_INTENSITY;
-    return () => {
-      if (scene.environment === target.texture) scene.environment = null;
-      target.dispose();
+    let target = null;
+    let gone = false;
+    const make = (texture) => {
+      if (gone) return;
+      const pmrem = new THREE.PMREMGenerator(gl);
+      const room = new RoomEnvironment();
+      if (texture) {
+        // the studio's lights only, round the sky (not its walls and boxes)
+        room.children.filter((o) => o.isMesh && !o.material.emissive?.getHex()).forEach((o) => {
+          o.removeFromParent();
+          o.material.dispose();
+        });
+        room.background = texture;
+        room.backgroundIntensity = SKY_REFLECTION;
+      }
+      target = pmrem.fromScene(room, 0.04);
+      room.dispose();
+      pmrem.dispose();
+      texture?.dispose();
+      scene.environment = target.texture;
+      scene.environmentIntensity = texture ? SKY_ENVIRONMENT_INTENSITY : ENVIRONMENT_INTENSITY;
     };
-  }, [gl, scene, reflections]);
+    if (sky)
+      new THREE.TextureLoader().load(
+        SKY_URL,
+        (texture) => {
+          texture.mapping = THREE.EquirectangularReflectionMapping;
+          texture.colorSpace = THREE.SRGBColorSpace;
+          make(texture);
+        },
+        undefined,
+        () => make(null), // (no sky: the studio)
+      );
+    else make(null);
+    return () => {
+      gone = true;
+      if (target && scene.environment === target.texture) scene.environment = null;
+      target?.dispose();
+    };
+  }, [gl, scene, reflections, sky]);
   return null;
 }
-
 
 /** A sun casting shadows onto the disc (Video → Shadows), and a soft fill from the sky. */
 function Lights({ shadows }) {
@@ -423,6 +454,7 @@ function useTools({ tool, material, clip, setClip, registry, bodies, holds, setB
       const button = e.button ?? 0;
       if (!((tool === 'select' && button === 0) || (button === 1 && !e.internalPointer))) return;
       if (!toolPointer(e) || drag.current || holds.resizing) return;
+      if (e.intersections?.some((hit) => hit.object.userData.gizmo)) return; // (a stretching cube behind it: that, not the object; see Gizmo.jsx)
       e.stopPropagation();
       if (!holds.take(id, DRAG)) return;
       const position = registry.get(id).mesh.current.getWorldPosition(new THREE.Vector3());
@@ -609,7 +641,7 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
           }
         />
       )}
-      <Environment reflections={state.reflections} />
+      <Environment reflections={state.reflections} sky={state.background !== 'solid' && !inAR} />
       <Lights shadows={state.shadows} />
       <Physics gravity={state.gravity ? GRAVITY : NO_GRAVITY} paused={state.paused} timeStep={1 / state.physicsRate}>
         <WakeOnGravity gravity={state.gravity} />
