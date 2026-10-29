@@ -1,20 +1,31 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
+import { useFrame } from '@react-three/fiber';
 import { useBeforePhysicsStep, useRapier } from '@react-three/rapier';
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { AIR_DENSITY } from './materials.js';
 import { CUBE_SIZE, CYLINDER, SPHERE_RADIUS, TORUS, shapeOf } from './shapes.js';
 import { GROUPS, lookMaterial, onLooksChanged } from './Physics.jsx';
+import { pours, useGrainPointer } from './grains.js';
 
-// Cloth: a shape made of fabric, not solid through. Its surface is a mesh of
-// points, each a small ball in Rapier, each held to its neighbours by a
-// thread (a rope joint: it can't stretch, but it slackens, so the fabric
-// folds and crumples), and it's stuffed: a gentle pressure inside pushes out
-// toward the volume it was made with, so a cloth cube is a cushion, a cloth
-// ball a beanbag. It falls, squashes, sags over what's under it, and things
-// land on it. The mouse (Select's left button, or the middle one) picks it up
-// by the point nearest the pointer.
+// Cloth and soft bodies: shapes whose surface is a mesh of points, each a
+// small ball in Rapier, each held to its neighbours by a thread (a rope joint:
+// it can't stretch, but it slackens, so the surface folds and crumples).
+// What else holds them in shape:
+//
+//   shape matching   (both) each step, the points' rest shape is fitted to
+//                    where they are now (moved and turned as they have), and
+//                    each point is pulled part of the way back to its place in
+//                    it, by the material's soft_stiffness: things pressing on
+//                    it dent it, and it springs back; a plastic one (clay)
+//                    takes the dents into its rest shape, and keeps them
+//   stuffing         (cloth) a gentle pressure inside pushes out toward the
+//                    volume it was made with: a cloth cube is a cushion, a ball
+//                    a beanbag; its shape matching is slight, so it slumps and folds
+//
+// A soft body weighs what the solid would; cloth what its fabric does. A
+// hand, or the mouse (Select's left button, or the middle one), picks one up
+// by a patch round where it's taken (see grains.js).
 //
 // How fine its mesh is: Physics → Cloth Detail (threads about CLOTH_EDGE apart
 // at 100%; finer, more points, MAX_POINTS at most).
@@ -22,8 +33,11 @@ import { GROUPS, lookMaterial, onLooksChanged } from './Physics.jsx';
 const CLOTH_EDGE = 0.025; // m: the threads' length at Cloth Detail 100%
 const MAX_POINTS = 900;
 const MASS_PER_POINT = 0.002; // kg (lighter, and things resting on it would press through)
-const STUFFING = 6000; // Pa of pressure for each part of its volume it's lost (more: firmer; it settles about a tenth squashed)
-const MAX_PRESSURE = 2500; // Pa
+const STUFFING = 3000; // Pa of pressure for each part of its volume it's lost (more: firmer)
+const MAX_PRESSURE = 1500; // Pa
+const DAMPING = { cloth: 1.5, soft: 0.5 }; // per second: how quickly its wobbling dies down (unless its material's damping says)
+const YIELD = 0.01; // m: a plastic soft body pushed further than this out of shape keeps part of it (its own weight sags it less)
+const SET = 0.3; // ...this much of it, each step
 const FALLEN_Y = -10;
 
 const looks = new Map();
@@ -112,9 +126,12 @@ export function clothMesh(def, detail) {
   const edges = edgesOf(surface.triangles);
   const rest = edges.map(([a, b]) => points[a].distanceTo(points[b]));
   const volume = volumeOf(points, surface.triangles);
+  // its rest shape, round its middle (for shape matching), as made
+  const centre = points.reduce((c, p) => c.add(p), new THREE.Vector3()).divideScalar(points.length);
+  const shape = points.map((p) => p.clone().sub(centre));
   if (def.grains?.length === points.length * 3) points = points.map((_, i) => new THREE.Vector3().fromArray(def.grains, i * 3));
   const sorted = [...rest].sort((a, b) => a - b);
-  return { points, triangles: surface.triangles, edges, rest, radius: sorted[Math.floor(sorted.length / 2)] * 0.4, volume };
+  return { points, triangles: surface.triangles, edges, rest, radius: sorted[Math.floor(sorted.length / 2)] * 0.4, volume, shape };
 }
 
 /** A closed mesh's volume (its triangles outward). */
@@ -124,9 +141,40 @@ function volumeOf(points, triangles) {
   return Math.abs(v);
 }
 const _c = new THREE.Vector3();
+const _g = new THREE.Vector3();
+const _d = new THREE.Vector3();
+const _m = new THREE.Matrix3();
 const _e1 = new THREE.Vector3();
 const _e2 = new THREE.Vector3();
 const _n = new THREE.Vector3();
+
+/**
+ * The turn that best fits rest shape `shape` (points round its middle) to
+ * `points` (round `centre`): the rotation part of Σ (p - centre) qᵀ, by
+ * polar decomposition (averaging it with its inverse transposed until it
+ * settles). `last`: the previous step's, kept if this one can't be found (squashed flat).
+ */
+function rotationFitting(points, shape, centre, last) {
+  const a = new THREE.Matrix3().set(0, 0, 0, 0, 0, 0, 0, 0, 0);
+  const e = a.elements; // (column-major: e[col * 3 + row])
+  points.forEach((p, i) => {
+    const px = p.x - centre.x;
+    const py = p.y - centre.y;
+    const pz = p.z - centre.z;
+    const q = shape[i];
+    e[0] += px * q.x; e[3] += px * q.y; e[6] += px * q.z;
+    e[1] += py * q.x; e[4] += py * q.y; e[7] += py * q.z;
+    e[2] += pz * q.x; e[5] += pz * q.y; e[8] += pz * q.z;
+  });
+  if (Math.abs(a.determinant()) < 1e-12) return last;
+  const r = a.clone();
+  const inv = new THREE.Matrix3();
+  for (let k = 0; k < 12; k++) {
+    inv.copy(r).invert().transpose();
+    for (let j = 0; j < 9; j++) r.elements[j] = 0.5 * (r.elements[j] + inv.elements[j]);
+  }
+  return r.determinant() > 0 ? r : last;
+}
 
 /** The cloth's surface for drawing: its triangles, UVs in metres (each point mapped from the plane its surface faces most). */
 function surfaceGeometry(mesh) {
@@ -153,38 +201,44 @@ function surfaceGeometry(mesh) {
 /**
  * One cloth object (`def`, made of a cloth material): its points and threads
  * made in the world (and taken out after), stuffed, drawn as one surface.
- * `pours`, `fluidGrains`: where it counts its points and gives them for
- * saving (see Fluids.jsx); `onClick(e, id)`: the tools; `grabs(e)`: whether a
- * pointer press may pick it up; `detail`: Physics → Cloth Detail.
+ * `fluidGrains`: where it gives its points for saving (see Fluids.jsx);
+ * `onClick(e, id)`: the tools; `grabs(e)`: whether a pointer press may pick
+ * it up; `pointed`: pointer id -> object id (for labels); `detail`: Physics → Cloth Detail.
  */
-export function ClothSheet({ def, material, pours, fluidGrains, setBodies, onClick, grabs, detail }) {
+export function ClothSheet({ def, material, fluidGrains, setBodies, onClick, grabs, pointed, detail }) {
   const { world, rapier } = useRapier();
-  const controls = useThree((s) => s.controls);
+  const drawn = useRef(null);
   const mesh = useMemo(() => clothMesh(def, def.clothDetail ?? detail), [def.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const geometry = useMemo(() => surfaceGeometry(mesh), [mesh]);
   useEffect(() => () => geometry.dispose(), [geometry]);
-  const drag = useRef(null); // { body, pointerId, ray, distance }
 
+  const soft = material.simulation === 'soft';
   useEffect(() => {
     const volume = (4 / 3) * Math.PI * mesh.radius ** 3;
+    // (a soft body: the solid's mass shared among its points; cloth: its fabric's)
+    const mass = soft ? (material.density * mesh.volume) / mesh.points.length : MASS_PER_POINT;
     const bodies = mesh.points.map((p) => {
       const body = world.createRigidBody(
         rapier.RigidBodyDesc.dynamic()
           .setTranslation(p.x, p.y, p.z)
-          .setLinearDamping(0.4)
+          .setLinearDamping(material.damping || (DAMPING[material.simulation] ?? 0.5))
           .setAngularDamping(1)
           .setGravityScale(1 - AIR_DENSITY / material.density)
           .setCanSleep(true),
       );
       world.createCollider(
-        rapier.ColliderDesc.ball(mesh.radius).setDensity(MASS_PER_POINT / volume).setFriction(material.friction).setRestitution(0).setCollisionGroups(GROUPS.object),
+        rapier.ColliderDesc.ball(mesh.radius)
+          .setDensity(mass / volume)
+          .setFriction(material.friction)
+          .setRestitution(soft ? material.restitution : 0)
+          .setCollisionGroups(GROUPS.object),
         body,
       );
       return body;
     });
     // the threads, each as long as it was made
     mesh.edges.forEach(([a, b], i) => world.createImpulseJoint(rapier.JointData.rope(mesh.rest[i], { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }), bodies[a], bodies[b], true));
-    const pour = { def, material, radius: mesh.radius, bodies };
+    const pour = { def, material, radius: mesh.radius, bodies, meshes: () => [drawn.current] };
     pours.set(def.id, pour);
     fluidGrains.set(def.id, {
       material,
@@ -200,29 +254,53 @@ export function ClothSheet({ def, material, pours, fluidGrains, setBodies, onCli
     };
   }, [world, rapier]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // the stuffing: each step, the surface pushed out (each triangle, by its area, along its normal) as far as it's lost volume
   const at = useMemo(() => mesh.points.map(() => new THREE.Vector3()), [mesh]);
+  const fit = useRef(new THREE.Matrix3()); // its rest shape's turn, last step
   useBeforePhysicsStep((w) => {
     const pour = pours.get(def.id);
-    if (!pour || pour.bodies.some((b) => b.isSleeping())) return;
-    pour.bodies.forEach((b, i) => at[i].copy(b.translation()));
-    const lost = 1 - volumeOf(at, mesh.triangles) / mesh.volume;
-    if (lost <= 0) return;
-    const pressure = Math.min(MAX_PRESSURE, STUFFING * lost);
+    if (!pour || pour.bodies.every((b) => b.isSleeping())) return;
+    const bodies = pour.bodies;
+    bodies.forEach((b, i) => at[i].copy(b.translation()));
     const dt = w.timestep;
-    for (const [a, b, c] of mesh.triangles) {
-      // (half the cross product: the triangle's area, along its outward normal)
-      _n.crossVectors(_e1.subVectors(at[b], at[a]), _e2.subVectors(at[c], at[a])).multiplyScalar((0.5 * pressure * dt) / 3);
-      for (const i of [a, b, c]) pour.bodies[i].applyImpulse(_n, false);
+    // the stuffing (cloth): the surface pushed out (each triangle, by its area, along its normal) as far as it's lost volume
+    const lost = soft ? 0 : 1 - volumeOf(at, mesh.triangles) / mesh.volume;
+    if (lost > 0) {
+      const pressure = Math.min(MAX_PRESSURE, STUFFING * lost);
+      for (const [a, b, c] of mesh.triangles) {
+        // (half the cross product: the triangle's area, along its outward normal)
+        _n.crossVectors(_e1.subVectors(at[b], at[a]), _e2.subVectors(at[c], at[a])).multiplyScalar((0.5 * pressure * dt) / 3);
+        for (const i of [a, b, c]) if (!bodies[i].isKinematic()) bodies[i].applyImpulse(_n, false);
+      }
     }
+    // shape matching: its rest shape fitted to where its points are, each pulled toward its place in it
+    const stiffness = material.softStiffness;
+    if (!stiffness) return;
+    const alpha = 1 - (1 - stiffness) ** (dt * 60); // (the same pull a second, whatever the physics rate)
+    const centre = _c.set(0, 0, 0);
+    for (const p of at) centre.add(p);
+    centre.divideScalar(at.length);
+    const turn = rotationFitting(at, mesh.shape, centre, fit.current);
+    fit.current.copy(turn);
+    const back = _m.copy(turn).transpose();
+    bodies.forEach((b, i) => {
+      // where it should be: its place in the rest shape, turned and moved as the whole is
+      _g.copy(mesh.shape[i]).applyMatrix3(turn).add(centre);
+      if (material.plasticity) {
+        // pushed far enough out of shape, a plastic one keeps part of it
+        _d.subVectors(at[i], centre).applyMatrix3(back).sub(mesh.shape[i]);
+        const over = _d.length() - YIELD;
+        if (over > 0) mesh.shape[i].addScaledVector(_d, (material.plasticity * SET * over) / (over + YIELD));
+      }
+      if (b.isKinematic()) return;
+      const v = b.linvel();
+      _g.sub(at[i]).multiplyScalar(alpha / dt);
+      b.setLinvel({ x: v.x + _g.x, y: v.y + _g.y, z: v.z + _g.z }, false);
+    });
   });
 
-  const _p = useMemo(() => new THREE.Vector3(), []);
   useFrame(() => {
     const pour = pours.get(def.id);
     if (!pour) return;
-    const d = drag.current;
-    if (d) d.body.setNextKinematicTranslation(d.ray.at(d.distance, _p));
     // (one fallen off the disc: it all goes)
     if (pour.bodies.some((b) => b.translation().y < FALLEN_Y)) {
       setBodies((list) => list.filter((b) => b.id !== def.id));
@@ -238,44 +316,18 @@ export function ClothSheet({ def, material, pours, fluidGrains, setBodies, onCli
     geometry.computeBoundingSphere();
   });
 
-  const letGo = (e) => {
-    const d = drag.current;
-    if (!d || d.pointerId !== e.pointerId) return;
-    drag.current = null;
-    d.body.setBodyType(rapier.RigidBodyType.Dynamic, true);
-    if (controls) controls.enabled = true;
-  };
-
+  const handlers = useGrainPointer(def.id, grabs, pointed);
   return (
     <mesh
+      ref={drawn}
+      userData={{ pourId: def.id }}
       geometry={geometry}
       material={clothLook(material)}
       castShadow
       receiveShadow
       frustumCulled={false}
+      {...handlers}
       onClick={(e) => onClick(e, def.id)}
-      onPointerDown={(e) => {
-        if (!grabs(e) || drag.current) return;
-        const pour = pours.get(def.id);
-        if (!pour) return;
-        e.stopPropagation();
-        // the point nearest where it was taken, held there
-        let best = null;
-        for (const b of pour.bodies) {
-          const dist = _p.copy(b.translation()).distanceToSquared(e.point);
-          if (!best || dist < best.dist) best = { b, dist };
-        }
-        best.b.setBodyType(rapier.RigidBodyType.KinematicPositionBased, true);
-        for (const b of pour.bodies) b.wakeUp();
-        drag.current = { body: best.b, pointerId: e.pointerId, ray: e.ray.clone(), distance: e.distance };
-        e.target?.setPointerCapture?.(e.pointerId);
-        if (controls) controls.enabled = false;
-      }}
-      onPointerMove={(e) => {
-        if (drag.current?.pointerId === e.pointerId) drag.current.ray.copy(e.ray);
-      }}
-      onPointerUp={letGo}
-      onPointerCancel={letGo}
     />
   );
 }

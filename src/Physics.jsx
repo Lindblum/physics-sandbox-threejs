@@ -16,6 +16,7 @@ import * as THREE from 'three';
 import { AIR_DENSITY, DISC_MATERIAL, STARTING_MATERIALS, materialById } from './materials.js';
 import { CUBE_SIZE, CYLINDER, SPHERE_RADIUS, shapeOf, transformedShape } from './shapes.js';
 import { pulseHand } from './grip.js';
+import { grainHolds, pourCentre, pourMass, pours } from './grains.js';
 import { materialMaps } from './textures.js';
 import { ParticleSystem } from './particles.js';
 import { impact, scrape, setListener, updateSounds } from './sound.js';
@@ -42,6 +43,8 @@ export { CUBE_SIZE, SPHERE_RADIUS };
 // at the hand's last velocity and spin, so it can be thrown (see Holds).
 
 export const DISC = { radius: 1, thickness: 0.1 }; // m; its top is the floor, y = 0
+// m: how deep its collider goes (deeper than it looks: something pushed half into it is always pushed out the top, never the bottom)
+const DISC_DEPTH = 0.6;
 const SPAWN_DROP = 0.1; // m: the first cubes start this far above the disc
 const SPAWN_REACH = DISC.radius - 0.15; // m from the centre: where they may start
 const SPAWN_APART = 0.17; // m between their centres at least
@@ -70,7 +73,9 @@ let nextId = 1;
  * resized or stretched, see Grab.jsx) }.
  */
 export function makeBody(shape, material, position, rotation = [0, Math.random() * Math.PI * 2, 0], start = false, motion = {}) {
-  return { id: nextId++, shape, material, position, rotation, start, ...motion };
+  // (a material made of grains, a soft body or cloth is always simulated so: see Fluids.jsx)
+  const fluid = materialById(material).simulation ? { fluid: true } : {};
+  return { id: nextId++, shape, material, position, rotation, start, ...fluid, ...motion };
 }
 
 /** The first ten: a cube of each starting material, at random places on the disc, apart from each other. */
@@ -264,6 +269,10 @@ export class Holds {
         this.map.delete(id);
         continue;
       }
+      // (not into the floor: held, it would pass through, and let go there, stick in it)
+      const entry = this.registry.get(id);
+      const geometry = entry.mesh.current?.geometry;
+      if (geometry) aboveFloor(h.position, h.quaternion, geometry, entry.preview ?? entry.base);
       body.setNextKinematicTranslation(h.position);
       body.setNextKinematicRotation(h.quaternion);
       if (h.last && dt > 0) {
@@ -284,6 +293,23 @@ export class Holds {
 }
 
 const _v = new THREE.Vector3();
+const _low = new THREE.Vector3();
+const _lowMatrix = new THREE.Matrix4();
+
+/**
+ * Lifts `position` (in place) so that something of `geometry`, resized by
+ * `matrix` and turned to `quaternion`, centred there, reaches no lower than
+ * the floor, if it's over the disc. Returns `position`.
+ */
+export function aboveFloor(position, quaternion, geometry, matrix) {
+  if (Math.hypot(position.x, position.z) > DISC.radius) return position;
+  _lowMatrix.makeRotationFromQuaternion(quaternion).multiply(matrix);
+  const points = geometry.attributes.position;
+  let low = Infinity;
+  for (let i = 0; i < points.count; i++) low = Math.min(low, _low.fromBufferAttribute(points, i).applyMatrix4(_lowMatrix).y);
+  if (position.y + low < 0) position.y = -low;
+  return position;
+}
 const _dq = new THREE.Quaternion();
 const _qi = new THREE.Quaternion();
 
@@ -295,7 +321,14 @@ const _qi = new THREE.Quaternion();
 export function Disc({ onClick, colliderRef, meshRef, handlers }) {
   return (
     <RigidBody type="fixed" colliders={false} position={[0, -DISC.thickness / 2, 0]}>
-      <CylinderCollider ref={colliderRef} args={[DISC.thickness / 2, DISC.radius]} friction={1} restitution={0.3} collisionGroups={GROUPS.disc} />
+      <CylinderCollider
+        ref={colliderRef}
+        args={[DISC_DEPTH / 2, DISC.radius]}
+        position={[0, (DISC.thickness - DISC_DEPTH) / 2, 0]}
+        friction={1}
+        restitution={0.3}
+        collisionGroups={GROUPS.disc}
+      />
       <mesh ref={meshRef} receiveShadow onClick={onClick} material={lookOf(DISC_MATERIAL)} {...handlers}>
         <cylinderGeometry args={[DISC.radius, DISC.radius, DISC.thickness, 96]} />
       </mesh>
@@ -573,10 +606,16 @@ function squashed(entry, normal, speed) {
   if (Math.max(...len) / Math.min(...len) > SQUASH_ASPECT) return null;
   return [...e];
 }
-// glue: a bond where something sticky touches, until it's pulled this far out of place
-const BOND_BREAK_M = 0.01;
-const BOND_BREAK_RAD = 0.35;
+// glue: a bond where something sticky touches, until it's pulled this far out of place (more, the stickier)
+const BOND_BREAK_M = 0.01; // m, and this much more at stickiness 1...
+const BOND_STICKY_M = 0.05;
+const BOND_BREAK_RAD = 0.35; // ...and turned this far, and this much more
+const BOND_STICKY_RAD = 0.6;
 const REBOND_S = 0.6; // s before a pair pulled apart can stick again
+const MAX_GRAIN_BONDS = 80; // grains (sand, droplets, cloth and soft bodies' points) one sticky object holds at most
+
+/** How far a bond with stickiness `sticky` (0 to 1) holds: { m, rad }. */
+const bondReach = (sticky) => ({ m: BOND_BREAK_M + BOND_STICKY_M * sticky, rad: BOND_BREAK_RAD + BOND_STICKY_RAD * sticky });
 const _p1 = new THREE.Vector3();
 const _p2 = new THREE.Vector3();
 const _qa = new THREE.Quaternion();
@@ -594,8 +633,10 @@ function localPoint(body, p) {
  * ringing both, throwing up their impact particles and wobbling the wobbly,
  * and buzzing the controller holding either, as hard as it struck; while they
  * touch, sliding hisses (and buzzes softly, held) and a ball rolling rumbles.
- * Something sticky (glue) bonds to what it touches, the disc too, with a
- * fixed joint, until pulled out of place (by a hand, say), when it lets go.
+ * Something sticky (glue) bonds to what it touches, the disc too, and the
+ * grains of sand and liquids and the points of cloth and soft bodies, with a
+ * fixed joint, until pulled far enough out of place (by a hand, say: the
+ * stickier, the further), when it lets go.
  * Something plastic (clay) is squashed where it strikes things, and stays so
  * (`onDeform(id, transform)`). Each frame the listener follows the viewer.
  * `disc`: ref to the disc's collider; `holds`: who holds what (see Holds).
@@ -603,7 +644,17 @@ function localPoint(body, p) {
 export function ContactSounds({ registry, disc, holds, onDeform }) {
   const { world, rapier } = useRapier();
   const pairs = useMemo(() => new Map(), []); // key -> { dv, struck, seen, unbonded }
-  const bonds = useMemo(() => new Map(), []); // key -> { joint, b1, b2, a1, a2, turn (b1's rotation relative to b2's) }
+  const bonds = useMemo(() => new Map(), []); // key -> { joint, b1, b2, a1, a2, turn (b1's rotation relative to b2's), reach, grainOf? }
+  const grainBonds = useMemo(() => new Map(), []); // sticky object's id -> how many grains it holds
+
+  /** A fixed joint between `b1` and `b2` where they touch (world `p`), as bond `key`, holding as far as `sticky` says. */
+  const bond = (key, b1, b2, p, sticky, ids, grainOf) => {
+    const a1 = localPoint(b1, p);
+    const a2 = localPoint(b2, p);
+    const turn = _qa.copy(b1.rotation()).premultiply(_qb.copy(b2.rotation()).invert()).clone();
+    const joint = world.createImpulseJoint(rapier.JointData.fixed(a1, { x: 0, y: 0, z: 0, w: 1 }, a2, turn), b1, b2, true);
+    bonds.set(key, { joint, b1, b2, a1, a2, turn, ids, reach: bondReach(sticky), grainOf });
+  };
   const slideBuzz = useRef({}); // hand -> when it may buzz for sliding again
   const gl = useThree((s) => s.gl);
   useAfterPhysicsStep((world) => {
@@ -616,11 +667,12 @@ export function ContactSounds({ registry, disc, holds, onDeform }) {
         _p1.copy(bond.a1).applyQuaternion(_qa.copy(bond.b1.rotation())).add(bond.b1.translation());
         _p2.copy(bond.a2).applyQuaternion(_qb.copy(bond.b2.rotation())).add(bond.b2.translation());
         const twist = _qa.copy(bond.b1.rotation()).premultiply(_qb.copy(bond.b2.rotation()).invert()).angleTo(bond.turn);
-        if (_p1.distanceTo(_p2) < BOND_BREAK_M && twist < BOND_BREAK_RAD) continue;
+        if (_p1.distanceTo(_p2) < bond.reach.m && twist < bond.reach.rad) continue;
         world.removeImpulseJoint(bond.joint, true);
         for (const id of bond.ids) for (const hand of holds.handsOf(id)) pulseHand(hand, 0.5, 40);
       }
       bonds.delete(key);
+      if (bond.grainOf) grainBonds.set(bond.grainOf, (grainBonds.get(bond.grainOf) ?? 1) - 1);
       const pair = pairs.get(key);
       if (pair) pair.unbonded = now;
     }
@@ -641,7 +693,22 @@ export function ContactSounds({ registry, disc, holds, onDeform }) {
       if (!a.body) continue;
       world.contactPairsWith(a.collider, (otherCollider) => {
         const b = byHandle.get(otherCollider.handle);
-        if (!b || b.key === a.key || (b.body && b.key < a.key)) return; // (each pair once)
+        if (!b) {
+          // a grain (sand, a droplet, a point of cloth or a soft body): something sticky picks it up
+          const grain = otherCollider.parent();
+          const key = `${a.key}:g${otherCollider.handle}`;
+          if (!a.material.sticky || !grain?.isDynamic() || bonds.has(key) || (grainBonds.get(a.key) ?? 0) >= MAX_GRAIN_BONDS) return;
+          if (now - (pairs.get(key)?.unbonded ?? -Infinity) <= REBOND_S) return;
+          world.contactPair(a.collider, otherCollider, (manifold) => {
+            if (!manifold.numSolverContacts() || bonds.has(key)) return;
+            const p = manifold.solverContactPoint(0);
+            pairs.set(key, { dv: 0, struck: 0, seen: now });
+            bond(key, a.body, grain, _a.set(p.x, p.y, p.z), a.material.sticky, [a.key], a.key);
+            grainBonds.set(a.key, (grainBonds.get(a.key) ?? 0) + 1);
+          });
+          return;
+        }
+        if (b.key === a.key || (b.body && b.key < a.key)) return; // (each pair once)
         const key = `${a.key}:${b.key}`;
         world.contactPair(a.collider, b.collider, (manifold) => {
           let impulse = 0;
@@ -699,13 +766,7 @@ export function ContactSounds({ registry, disc, holds, onDeform }) {
           // something sticky touching: they bond where they touch
           if ((a.material.sticky || b.material.sticky) && !bonds.has(key) && now - (pair.unbonded ?? -Infinity) > REBOND_S) {
             const b2 = b.body ?? disc.current.parent();
-            if (b2) {
-              const a1 = localPoint(a.body, _a);
-              const a2 = localPoint(b2, _a);
-              const turn = _qa.copy(a.body.rotation()).premultiply(_qb.copy(b2.rotation()).invert()).clone();
-              const joint = world.createImpulseJoint(rapier.JointData.fixed(a1, { x: 0, y: 0, z: 0, w: 1 }, a2, turn), a.body, b2, true);
-              bonds.set(key, { joint, b1: a.body, b2, a1, a2, turn, ids: [a.key, b.key].filter(Boolean) });
-            }
+            if (b2) bond(key, a.body, b2, _a, Math.max(a.material.sticky, b.material.sticky), [a.key, b.key].filter(Boolean));
           }
           // sliding: how fast the surfaces pass each other where they touch
           const n = manifold.normal();
@@ -776,6 +837,14 @@ function labelTexture(text) {
 }
 
 /** A mass as people say it: grams, kilograms or tonnes, to three figures. */
+/** A volume (m³) for a label: cm³, litres or m³, three figures. */
+export function volumeText(m3) {
+  const three = (v) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
+  if (m3 < 0.001) return `${three(m3 * 1e6)} cm³`;
+  if (m3 < 1) return `${three(m3 * 1000)} L`;
+  return `${three(m3)} m³`;
+}
+
 export function massText(kg) {
   const three = (v) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
   if (kg < 1) return `${three(kg * 1000)} g`;
@@ -788,10 +857,11 @@ const _at = new THREE.Vector3();
 
 /**
  * Over each object held or pointed at (`pointed`: pointer id -> object id),
- * facing the viewer: its material's name and its mass. `viewScale()`: how much bigger
+ * facing the viewer: its material's name and its mass. A pour or cloth (see
+ * grains.js): over where it's held, or its middle, its whole mass. `viewScale()`: how much bigger
  * than life the viewer is (the scene scale's inverse), so labels look the same size.
  */
-export function MaterialLabels({ registry, holds, pointed, viewScale }) {
+export function MaterialLabels({ registry, holds, pointed, viewScale, selected = null }) {
   const sprites = useRef([]);
   const materials = useMemo(
     () => Array.from({ length: LABELS }, () => new THREE.SpriteMaterial({ depthTest: false, depthWrite: false, transparent: true, toneMapped: false })),
@@ -803,24 +873,39 @@ export function MaterialLabels({ registry, holds, pointed, viewScale }) {
   useFrame(() => {
     // (the viewer: the headset's camera in XR, which the scene's camera doesn't follow)
     const viewer = gl.xr.isPresenting ? gl.xr.getCamera() : camera;
-    const ids = [...new Set([...holds.map.keys(), ...pointed.values()])];
-    const shown = ids.map((id) => registry.get(id)).filter((e) => e?.mesh.current);
+    const ids = [...new Set([...holds.map.keys(), ...[...grainHolds.values()].map((h) => h.id), ...pointed.values(), ...(selected != null ? [selected] : [])])];
+    // each: { text, at (where it is), reach (how far its top is above that) }
+    const shown = ids.flatMap((id) => {
+      const entry = registry.get(id);
+      if (entry?.mesh.current) {
+        // (being stretched: as it will be, by how much its volume's grown)
+        const grown = entry.preview ? Math.abs(_m3a.setFromMatrix4(entry.preview).determinant() / _m3a.setFromMatrix4(entry.base).determinant()) : 1;
+        const mass = (entry.body.current?.mass() ?? 0) * grown;
+        const volume = entry.measure.volume * grown;
+        entry.mesh.current.getWorldPosition(_at);
+        // (the selected one: its volume too)
+        const text = [entry.material.name, mass ? massText(mass) : null, id === selected ? volumeText(volume) : null].filter(Boolean).join(' · ');
+        return [{ text, at: _at.clone(), reach: entry.measure.radius * Math.cbrt(grown) }];
+      }
+      const pour = pours.get(id);
+      if (!pour?.bodies.length) return [];
+      const hold = [...grainHolds.values()].find((h) => h.id === id);
+      return [{ text: `${pour.material.name} · ${massText(pourMass(id))}`, at: hold ? hold.point.clone() : pourCentre(id, new THREE.Vector3()), reach: pour.radius * 4 }];
+    });
     const k = viewScale();
     sprites.current.forEach((sprite, i) => {
       if (!sprite) return;
-      const entry = shown[i];
-      sprite.visible = Boolean(entry);
-      if (!entry) return;
-      const mass = entry.body.current?.mass();
-      const { texture, aspect } = labelTexture(mass ? `${entry.material.name} · ${massText(mass)}` : entry.material.name);
+      const label = shown[i];
+      sprite.visible = Boolean(label);
+      if (!label) return;
+      const { texture, aspect } = labelTexture(label.text);
       if (sprite.material.map !== texture) {
         sprite.material.map = texture;
         sprite.material.needsUpdate = true;
       }
       // above the object whichever way it's turned (its bounding sphere's top)
-      entry.mesh.current.getWorldPosition(_at);
       const h = LABEL_H_M * k;
-      sprite.position.set(_at.x, _at.y + entry.measure.radius + LABEL_GAP_M * k + h / 2, _at.z);
+      sprite.position.set(label.at.x, label.at.y + label.reach + LABEL_GAP_M * k + h / 2, label.at.z);
       // the same size on screen however far, but never smaller than life size up close
       const far = Math.max(1, viewer.getWorldPosition(_v).distanceTo(sprite.position) / (1.2 * k));
       sprite.scale.set(h * aspect * far, h * far, 1);

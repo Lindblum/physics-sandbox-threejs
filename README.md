@@ -1,6 +1,6 @@
 # Physics Sandbox
 
-Pick up, throw and stack real-size solids (cubes, spheres, Platonic, Catalan and stellated polyhedra) of 46 materials, real and fictional, liquids that pour and sand that heaps, on a disc at your feet, hearing them knock, ring and scrape, some glowing, smoking or burning, on a desktop, in stereo 3D, or in WebXR (VR, passthrough AR, phone viewers).
+Pick up, throw and stack real-size solids (cubes, spheres, Platonic, Catalan and stellated polyhedra) of 47 materials, real and fictional, liquids that pour and sand that heaps, on a disc at your feet, hearing them knock, ring and scrape, some glowing, smoking or burning, on a desktop, in stereo 3D, or in WebXR (VR, passthrough AR, phone viewers).
 
 Live: https://lindblum.github.io/physics-sandbox-threejs/
 
@@ -21,14 +21,14 @@ npm run preview    # the build, on http://localhost:5276
 - Everything is real size: the floor is a solid concrete disc, 1 m across the radius and 10 cm thick, its top the floor you stand on in XR. Gravity doesn't move it and it can't be picked up.
 - In XR, hold both grips in mid-air (no object at either probe) and move your hands apart or together to scale the scene, and turn them to turn it, about your hands' midpoint, as in Tilt Brush. The scale shows in Options' top-right corner (press it for real size). It's you that changes size, so the physics doesn't.
 - Ten cubes start 10 cm above it: Wood (Oak), Steel, Rubber, Ice, Glass, Granite, Foam, Aluminium, Gold and Plastic. Each has its own density (so mass), friction and bounce.
-- The shape tools make one of the Material chosen in Tools, or a random one: Cube (10 cm), Sphere (10 cm), Cylinder (10 cm), Torus (14 cm), Tetrahedron, Octahedron, Icosahedron, Dodecahedron, Stellated Dodecahedron, Stellated Icosahedron, Rhombic Dodecahedron, Truncated Octahedron, Rhombic Triacontahedron (15 cm across their points). The stellated ones collide as what they are: a core with a pyramid on each face.
+- The shape tools make one of the Material chosen in Edit, or a random one: Cube (10 cm), Sphere (10 cm), Cylinder (10 cm), Torus (14 cm), Tetrahedron, Octahedron, Icosahedron, Dodecahedron, Stellated Dodecahedron, Stellated Icosahedron, Rhombic Dodecahedron, Truncated Octahedron, Rhombic Triacontahedron (15 cm across their points). The stellated ones collide as what they are: a core with a pyramid on each face.
 - An object you point at, or pick up, shows its material and mass over it.
 - With a shape tool (or Paste), a wireframe shows where it would go: on the surface under the mouse, or in XR on the surface a controller points at, or round its probe when it points at nothing. A click, or the trigger, makes it there.
 - Copy takes an object (its shape, material and size), Paste makes more like it, Delete takes one away.
 - In XR, grip an object you're holding with your other hand too (its probe on it, or its ray pointing at it) to turn and resize it: it follows your hands, turns with them, and grows or shrinks with the distance between them. Hold a trigger to stretch it only along the line between the probes. It keeps its new size and shape, collider and mass included (and in saved scenes).
 - The controller buzzes softly while its probe touches an object (not while its grip is held), and as hard as a held object strikes something, softly while it slides.
-- Everything moves through air: it drags (foam and cotton drift down), and buoys things up, so Smoke and Steam rise. Gases and plasmas pass through things; Fire, Plasma and Unobtainium hover where they're left; heavy Fog sinks and spreads over the floor; Haze hangs in the air, drifting; Dander's flakes flutter down and settle. Gelatin and Flubber wobble when struck; wet Clay squashes where it strikes things, and stays squashed; Glue sticks to whatever it touches, the floor too, until pulled apart.
-- Water, Oil, Honey, Mercury and Sand are simulated as grains (`src/Fluids.jsx`): a shape of them is several hundred small bodies that pour, splash, puddle and heap, and push and are pushed by the objects. Liquids' droplets cling together (Mercury beads up) and drag on each other (Honey is slow), drawn as one smooth surface round them (metaballs); Sand's grains are angular (little boxes, drawn as pebbles), so they interlock and heap. Fabric (Cloth) makes the shape as a stuffed cushion of fabric: a mesh of points held by threads, pushed out by its stuffing, that squashes, sags and folds, and the mouse can pick up. Up to 2400 grains at once (the oldest pours go). Their names say so: (Fluid), (Particle), (Cloth).
+- Everything moves through air: it drags (foam and cotton drift down), and buoys things up, so Smoke and Steam rise. Gases and plasmas pass through things; Fire, Plasma and Unobtainium hover where they're left; heavy Fog sinks and spreads over the floor; Haze hangs in the air, drifting; Dander's flakes flutter down and settle. Flubber bounces and wobbles; Gelatin, Foam, Silicone and Wool are soft bodies, dented by what presses on them and springing back, and Wet Clay keeps its dents; Glue sticks to whatever it touches, the floor too, and picks up sand, droplets and the surfaces of cloth and soft bodies, until pulled well apart.
+- Water, Oil, Honey, Mercury and Sand are simulated as grains (`src/Fluids.jsx`): a shape of them is several hundred small bodies that pour, splash, puddle and heap, and push and are pushed by the objects. Liquids' droplets cling together (Mercury beads up) and drag on each other (Honey is slow), drawn as one smooth surface round them (metaballs); Sand's grains are angular (little boxes, drawn as pebbles), so they interlock and heap. Fabric (Cloth) makes the shape as a stuffed cushion of fabric: a mesh of points held by threads, pushed out by its stuffing, that squashes, sags and folds, and the mouse can pick up. A grip (probe or ray) or the mouse takes a handful of a liquid or sand, or a patch of cloth, and throws it; pointed at or held, they show their material and whole mass. Up to 2400 grains at once (the oldest pours go). Soft bodies are a mesh of points held in shape by shape matching (each pulled back toward its rest shape, fitted to where it is). Their names say so: (Fluid), (Particle), (Cloth), (Soft).
 - Glowing materials (Lava, Fire, Plasma, Kryptonite, Glow-in-the-Dark Plastic, Unobtainium) light what's around them: the four nearest you at once.
 - Particles: Smoke, Steam and Fire give off smoke, steam and flames, Lava sparks, glowing things motes; Sand and Snow throw up dust where they're struck, liquids splash.
 - Things that strike or slide on each other sound like what they're made of, louder and brighter the harder and heavier, from where they are (see below).
@@ -36,7 +36,7 @@ npm run preview    # the build, on http://localhost:5276
 
 ## Materials
 
-`src/materials.csv` is the table: a row a material, a column a property. Add a column and every material has it (`material.row.<column>` in code); add a row and it's in the Material dropdown. 46 so far: Air, Smoke, Steam, Heavy Fog, Haze, Dander, Water, Vegetable Oil, Honey, Ice, Snow, Oak, Pine, Cardboard, Paper, Cloth, Cotton, Leather, Rubber, Foam, Plastic, Glass, Ceramic, Brick, Concrete, Granite, Marble, Clay, Iron, Steel, Aluminium, Copper, Gold, Mercury, Sand, Gelatin, Silicone, Glue, Lava, Fire, Plasma, Glow-in-the-Dark Plastic, and the fictional Flubber, Kryptonite, Mithril and Unobtainium.
+`src/materials.csv` is the table: a row a material, a column a property. Add a column and every material has it (`material.row.<column>` in code); add a row and it's in the Material dropdown. 47 so far, listed alphabetically: Air, Smoke, Steam, Heavy Fog, Haze, Dander, Water, Vegetable Oil, Honey, Ice, Snow, Oak, Pine, Cardboard, Paper, Cloth, Wool, Leather, Rubber, Foam, Plastic, Glass, Terracotta, Porcelain, Brick, Concrete, Granite, Marble, Clay, Iron, Steel, Aluminium, Copper, Gold, Mercury, Sand, Gelatin, Silicone, Glue, Lava, Fire, Plasma, Glow-in-the-Dark Plastic, and the fictional Flubber, Kryptonite, Mithril and Unobtainium.
 
 | Columns | |
 | --- | --- |
@@ -49,7 +49,7 @@ npm run preview    # the build, on http://localhost:5276
 | `color_variance` | how much one object's colour differs from the next |
 | `restitution_combine`, `gravity_scale`, `damping`, `jiggle` | bounciness off anything (Flubber), hovering, settling, wobbling |
 | `collides`, `sticky`, `plasticity` | what it bumps into (all, the floor only, nothing), whether it glues itself to what it touches, whether it stays squashed where struck |
-| `simulation`, `grain_count`, `sim_cohesion`, `sim_viscosity` | made of grains (liquid, granular or cloth), how many in a 10 cm cube's worth (cloth: in its sheet), how they cling and drag |
+| `simulation`, `soft_stiffness`, `grain_count`, `sim_cohesion`, `sim_viscosity` | made of grains (liquid, granular), a cloth or a soft body; how firmly a soft one springs back; how many grains in a 10 cm cube's worth, how they cling and drag |
 | `particles`, `particle_rate`, `impact_particles` | what it gives off, how much, and what flies where it's struck |
 | `impact_*`, `scrape_*` | the synthesized sounds: a 10 cm object's ring (pitch, ring time, partials, noise, brightness, loudness) and its sliding hiss |
 | `youngs_modulus_gpa` … `speed_of_sound_m_s` | for simulations to come: stiffness, melting and boiling points, specific heat, conductivity, viscosity, speed of sound |
@@ -70,22 +70,22 @@ Options → File → Save Scene downloads a `.glb` (glTF 2.0): the disc, every o
 | Physics | Gravity On / Off, Simulation Running / Paused, Physics Rate (30 to 240 Hz), Grain Detail and Cloth Detail (how fine pours and cloth are made), Reset Objects |
 | Video | Background (Solid, Skybox, Passthrough), View Mode, Show Grid (every 10 cm over the disc, up to 2 m), VSync, XR Resolution, and the costly effects, each to turn down where frames run short: Reflections, Refraction (off at first in a headset), Shadows, Glow Lights, Surface Detail, Liquid Surfaces (Smooth metaballs / Droplets) and their detail, Particles (High / Low) |
 | Accessibility | Volume, Vibration (to 200%), Text Size, Controller Guide |
-| Tools (its own panel) | Tool: Select (pick up), Copy, Paste, Delete, or a shape (make one); Material: Random or any of the 46 |
+| Edit (its own panel) | Tool: Select (pick up), Copy, Paste, Delete, or a shape (make one); Material: Random or any of the 46 |
 
 ## Controls
 
 | | Desktop | XR |
 | --- | --- | --- |
-| Pick up and throw | Middle button (any tool), or Select's left: drag an object, let go while moving; the wheel moves it nearer / further |
-| Stretch an object | Shift + middle-drag: along the drag, out longer, in shorter (its far side stays put) | Grip: what the probe (the orange ball at the controller's tip) touches, or what you point at; Select + trigger drags too |
-| Make a shape | Pick it in Tools, click the disc or an object (its wireframe shows where) | Point at a surface, or at nothing (round the probe), and pull the trigger |
+| Pick up and throw | Middle button (any tool), or Select's left: drag an object, let go while moving; the wheel moves it nearer / further | Grip: what the probe (the orange ball at the controller's tip) touches, or what you point at; Select + trigger drags too |
+| Stretch an object | Select it (Select, click it; click the disc for none): its frame shows, a red cube on X, green on Y, blue on Z. Drag a cube along its line: out longer, in shorter (the far side stays put); its volume and mass follow, on its label | Select + trigger on it, then point at a cube and drag it with the trigger; or hold it with both grips (Turn / resize, below) |
+| Make a shape | Pick it in Edit, click the disc or an object (its wireframe shows where) | Point at a surface, or at nothing (round the probe), and pull the trigger |
 | Copy, Paste, Delete | Click an object; Paste: click where it goes | Point and pull the trigger |
 | Scale the scene | | Both grips in mid-air: hands apart / together, turn them |
 | Turn / resize an object | | Hold it, grip it with the other probe too; a trigger: stretch along the hands' line |
 | Held object | | Thumbstick up / down pushes it away / reels it in, left / right rolls it |
 | Orbit / zoom, move | Drag / scroll | Walk; left stick moves (the way the left controller points), right stick turns |
 | Menus by stick | | Press a stick in (L3 / R3): it works the panels docked on its controller (its probe turns blue): up / down through them, left / right sets a slider, A / X chooses, B / Y goes back a level; press it again to move |
-| Panels | `Enter` / `Esc` toggles Options; `1` … `9`, `0` tools, `G` gravity, `P` pause, `M` mute, `R` reset | View and Options dock on the left controller, Tools on the right; hold a grip on a panel to move it, tap twice to dock / undock, three times to bring them all |
+| Panels | `Enter` / `Esc` toggles Options; `1` … `9`, `0` tools, `G` gravity, `P` pause, `M` mute, `R` reset | View and Options dock on the left controller, Edit on the right; hold a grip on a panel to move it, tap twice to dock / undock, three times to bring them all |
 
 ## Layout
 
@@ -98,7 +98,7 @@ Options → File → Save Scene downloads a `.glb` (glTF 2.0): the disc, every o
 - `src/sound.js`: the sounds' synthesis
 - `src/sceneFile.js`: saving and opening scenes (.glb)
 - `src/Scene.jsx`, `src/App.jsx`: the scene and the tools, app state, keyboard and windowed panels
-- `src/menu.js`, `src/XRMenuPanel.jsx`: the shared panels (Options, View, Tools) and their XR (canvas) panels
+- `src/menu.js`, `src/XRMenuPanel.jsx`: the shared panels (Options, View, Edit) and their XR (canvas) panels
 - `src/Grab.jsx`, `src/grip.js`: grips, controller probes, scaling the scene and panel docking
 - `src/SideBySide.jsx`, `src/Interlaced.jsx`: windowed stereo views
 - `src/PhoneStereo.jsx`, `src/Cardboard.jsx`, `src/CardboardLens.js`, `src/Gaze.jsx`: phone XR, phone viewers and gaze dwell-to-click

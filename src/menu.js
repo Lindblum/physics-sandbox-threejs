@@ -10,7 +10,7 @@ import { SHAPES } from './shapes.js';
 
 export const MENU_TITLE = 'Physics Sandbox';
 
-/** The panels' toggle buttons: Options' gear (opens and closes it), the View panel's (into XR or back) and the Tools panel's. */
+/** The panels' toggle buttons: Options' gear (opens and closes it), the View panel's (into XR or back) and the Edit panel's. */
 export const MENU_TOGGLE = 'menu:toggle';
 export const VIEW_TOGGLE = 'view:toggle';
 export const TOOLS_TOGGLE = 'tools:toggle';
@@ -35,8 +35,11 @@ export function scaleLabel(scale) {
   return `×${scale >= 10 ? scale.toFixed(1) : scale >= 0.995 ? scale.toFixed(2) : scale.toFixed(3)}`;
 }
 
-/** The Material dropdown's choices: Random (a solid or liquid one each time), then the table's, in its order. */
-export const MATERIAL_CHOICES = [{ value: 'random', label: 'Random' }, ...MATERIALS.map((m) => ({ value: m.id, label: m.name }))];
+/** The Material dropdown's choices: Random (a solid one each time), then the table's, alphabetically. */
+export const MATERIAL_CHOICES = [
+  { value: 'random', label: 'Random' },
+  ...MATERIALS.map((m) => ({ value: m.id, label: m.name })).sort((a, b) => a.label.localeCompare(b.label)),
+];
 
 /**
  * The panels, one template for both renderers (the windowed one in App.jsx,
@@ -75,7 +78,7 @@ export function viewPanel(inXR) {
 }
 
 /**
- * The Tools panel, like grid-game-threejs's Control menu (windowed in the
+ * The Edit panel (its id still 'tools'), like grid-game-threejs's Control menu (windowed in the
  * top-right corner; in XR on the right controller): two dropdowns, the tool in
  * use and the material the shape tools make things of.
  * `state`: { toolsOpen, tool, material, clip (what Copy took, if anything), dropdowns }.
@@ -97,8 +100,8 @@ export function toolsPanel(state) {
   ];
   return {
     id: 'tools',
-    toggle: { id: TOOLS_TOGGLE, icon: 'eye', label: state.toolsOpen ? 'Hide tools' : 'Show tools' },
-    title: 'Tools',
+    toggle: { id: TOOLS_TOGGLE, icon: 'edit', label: state.toolsOpen ? 'Hide edit' : 'Show edit' },
+    title: 'Edit',
     open: state.toolsOpen,
     items,
     labels: [...TOOLS.map((t) => `Tool: ${t.label}`), ...MATERIAL_CHOICES.map((m) => `Material: ${m.label}`)],

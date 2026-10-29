@@ -119,9 +119,9 @@ function grainsMesh(def, pour, looks) {
     for (let i = 0; i < at.length; i += 3) parts.push(ball.clone().translate(at[i], at[i + 1], at[i + 2]));
     geometry = mergeGeometries(parts);
   }
-  const look = material.simulation === 'cloth' ? Object.assign(looks.get(material.id).clone(), { side: THREE.DoubleSide }) : looks.get(material.id);
+  const look = pour.surface ? Object.assign(looks.get(material.id).clone(), { side: THREE.DoubleSide }) : looks.get(material.id);
   const mesh = new THREE.Mesh(geometry, look);
-  mesh.name = `${material.name} ${{ liquid: 'droplets', granular: 'grains', cloth: shapeOf(def.shape).label }[material.simulation]}`;
+  mesh.name = `${material.name} ${{ liquid: 'droplets', granular: 'grains', cloth: shapeOf(def.shape).label, soft: shapeOf(def.shape).label }[material.simulation]}`;
   const n = at.length / 3;
   mesh.userData = {
     sandbox_fluid: true,

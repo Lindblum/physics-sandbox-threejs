@@ -27,13 +27,15 @@
 //   jiggle                   how much it wobbles when struck (a rigid body's looks only)
 //   collides                 what it bumps into: all, floor (only the disc: heavy fog) or none
 //                            (gases and plasmas, unless it says)
-//   plasticity               0 to 1: it squashes where it strikes things, and stays so (clay)
+//   plasticity               0 to 1: dented, it stays dented (clay; a solid one squashes where it strikes)
+//   soft_stiffness           a soft body's (and cloth's) pull back to its shape, each step: 0 (none) to 1 (rigid)
 //   sticky                   0 to 1: it glues itself to what it touches, held until pulled
 //                            that much apart (see Glue in Physics.jsx)
 //   simulation, grain_count, sim_cohesion, sim_viscosity   made of many grains, not one solid
 //                            (see Fluids.jsx): liquid (droplets that cling together, by
 //                            sim_cohesion m/s², and drag on each other, by sim_viscosity 0 to 1),
-//                            granular (sand) or cloth (a sheet of points held by threads);
+//                            granular (sand), cloth (a stuffed shell of points held by threads)
+//                            or soft (a shell that dents and springs back: see Cloth.jsx);
 //                            about grain_count in a 10 cm cube's worth (cloth: in its sheet)
 //   particles, particle_rate, impact_particles   the particles it gives off all the time, how many
 //                            (× the preset's), and where struck (see particles.js)
@@ -91,6 +93,7 @@ function material(row) {
     collides,
     sticky: n(row.sticky, 0),
     plasticity: n(row.plasticity, 0),
+    softStiffness: n(row.soft_stiffness, 0),
     simulation: row.simulation ?? null,
     grainCount: n(row.grain_count, 250),
     cohesion: n(row.sim_cohesion, 0),

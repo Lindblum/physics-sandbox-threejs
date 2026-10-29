@@ -3,8 +3,9 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { pulse, readControllers } from './grip.js';
 import { focusables, slideEndId, slideId } from './menu.js';
-import { distanceOutside as shapeDistance, restingPosition } from './shapes.js';
-import { transformMatrix } from './Physics.jsx';
+import { distanceOutside as shapeDistance, restingPosition, shapeOf } from './shapes.js';
+import { aboveFloor, transformMatrix } from './Physics.jsx';
+import { grainHolds, grainMeshes, grainsNear, moveGrains, releaseGrains, takeGrains } from './grains.js';
 
 // Touch controller grips: the objects, and the XR panels, as in grid-game-threejs.
 //
@@ -17,6 +18,10 @@ import { transformMatrix } from './Physics.jsx';
 // while it's inside an object, so you can feel what you could take (not while
 // its grip is held, nor on something held); a held object striking or sliding
 // on another buzzes the hand holding it (see ContactSounds).
+//
+// Liquids, sand and cloth (made of grains, see grains.js) are taken the same
+// way, a handful (or a patch of cloth) round where the probe touches or the
+// ray points, and thrown when let go.
 //
 // The other grip pressed with its probe on the object already held (or its
 // ray pointing at it): both hands hold it, to turn and resize it. It follows the hands' midpoint, turns
@@ -203,7 +208,8 @@ export function useControllerGrips({
   onFocus,
 }) {
   const gl = useThree((s) => s.gl);
-  // hand -> { target: 'body', id, offset, point, byRay, at } | { target: 'panel', key, offset, point, size, grow, zone } | { target: 'scale' } | { target: 'resize', id } | { target: 'none' }
+  // hand -> { target: 'body', id, offset, point, byRay, at } | { target: 'grains', id, offset, point } | { target: 'panel', key, offset, point, size, grow, zone }
+  //   | { target: 'scale' } | { target: 'resize', id } | { target: 'none' }
   const grabs = useRef({});
   const scaling = useRef(null); // both grips in mid-air: { k0, turn0, mid0 (world), span0, angle0 (tracking space) }
   const reported = useRef(1);
@@ -431,6 +437,35 @@ export function useControllerGrips({
       grabs.current[other] = bodyGrab(c, r.id);
     };
 
+    /** `hand` takes a handful of pour (or cloth) `id`'s grains round world point `point`. */
+    const takeGrainsAt = (hand, c, id, point) => {
+      c.grip.decompose(_pos, _quat, _scale);
+      if (!takeGrains(id, hand, point, _quat)) return;
+      buzz(hand, PULSE.grab);
+      _gripInverse.copy(c.grip).invert();
+      grabs.current[hand] = {
+        target: 'grains',
+        id,
+        offset: _gripInverse.clone().multiply(new THREE.Matrix4().compose(point, _quat, _one)),
+        point: point.clone().applyMatrix4(_gripInverse),
+      };
+    };
+
+    /** The grains (a pour or cloth) controller `c`'s probe touches: { id, point }, or null. */
+    const grainsTouched = (c) => {
+      controllerTip(c.rayMatrix, _tip);
+      const near = grainsNear(_tip, (PROBE_RADIUS + PROBE_REACH) * k);
+      return near && { id: near.id, point: _tip.clone() };
+    };
+
+    /** The grains controller `c` points at (the nearest drawn): { id, point, distance }, or null. */
+    const grainsPointed = (c) => {
+      raycaster.ray.copy(c.ray);
+      raycaster.far = RAY_REACH * k;
+      const hit = raycaster.intersectObjects(grainMeshes(), false)[0];
+      return hit?.object.userData.pourId != null ? { id: hit.object.userData.pourId, point: hit.point.clone(), distance: hit.distance } : null;
+    };
+
     /** Both grips in mid-air: scaling starts from here. */
     const startScale = () => {
       const l = controllers.left.position.clone().applyMatrix4(_originInverse);
@@ -467,6 +502,12 @@ export function useControllerGrips({
         takeBody(hand, c, touched);
         return;
       }
+      // the probe in a liquid, sand or cloth: a handful of it
+      const grainy = grainsTouched(c);
+      if (grainy) {
+        takeGrainsAt(hand, c, grainy.id, grainy.point);
+        return;
+      }
       // pointing at what the other hand holds: both turn and resize it
       if (other0?.target === 'body' && holds.isHeld(other0.id, otherHand(hand)) && controllers[otherHand(hand)] && bodyPointed(c) === other0.id) {
         startResize(other0.id);
@@ -500,11 +541,15 @@ export function useControllerGrips({
         if (mine.length) buzz(hand, PULSE.detach);
         return;
       }
-      // a panel or an object pointed at: the nearer
+      // a panel, an object or some grains pointed at: the nearest
       const pointed = bodyPointed(c);
-      if (at && (pointed == null || at.distance <= raycaster.ray.origin.distanceTo(registry.get(pointed).mesh.current.getWorldPosition(_v))))
-        takePanel(hand, c, at);
-      else if (pointed != null) takeBody(hand, c, pointed, true);
+      const bodyDistance = pointed == null ? Infinity : raycaster.ray.origin.distanceTo(registry.get(pointed).mesh.current.getWorldPosition(_v));
+      const grains = grainsPointed(c);
+      const nearest = Math.min(at?.distance ?? Infinity, bodyDistance, grains?.distance ?? Infinity);
+      if (nearest === Infinity) return;
+      if (at && at.distance === nearest) takePanel(hand, c, at);
+      else if (grains && grains.distance === nearest) takeGrainsAt(hand, c, grains.id, grains.point);
+      else takeBody(hand, c, pointed, true);
     };
 
     const gripEnd = (hand) => {
@@ -524,6 +569,10 @@ export function useControllerGrips({
       }
       if (g?.target === 'body') {
         holds.release(g.id, hand);
+        return;
+      }
+      if (g?.target === 'grains') {
+        releaseGrains(hand);
         return;
       }
       if (g?.target !== 'panel') return;
@@ -623,6 +672,15 @@ export function useControllerGrips({
         holds.move(g.id, hand, _pos, _quat);
         continue;
       }
+      if (g.target === 'grains') {
+        if (!grainHolds.has(hand)) {
+          grabs.current[hand] = { target: 'none' }; // (its pour went)
+          continue;
+        }
+        _world.multiplyMatrices(c.grip, g.offset).decompose(_pos, _quat, _scale);
+        moveGrains(hand, _pos, _quat, dt);
+        continue;
+      }
       // a panel, easing to its free size about the point it's held by
       g.size += (g.grow - g.size) * (1 - Math.exp(-GROW_RATE * dt));
       const { x: px, y: py, z: pz } = g.point;
@@ -663,6 +721,7 @@ export function useControllerGrips({
         // round the probe, turned as the hand is
         position = controllerTip(c.rayMatrix, new THREE.Vector3());
         c.grip.decompose(_pos, quaternion, _scale);
+        aboveFloor(position, quaternion, shapeOf(spec.shape).geometry, transformMatrix(spec.transform)); // (not in the floor)
       }
       preview.matrix.compose(position, quaternion, _one).multiply(transformMatrix(spec.transform));
       preview.visible = true;
@@ -798,6 +857,7 @@ export function useControllerGrips({
       }
       let touched = bodyTouched(c);
       if (touched != null && holds.isHeld(touched)) touched = null; // (nor on something held)
+      if (touched == null) touched = grainsTouched(c)?.id ?? null; // (a liquid, sand or cloth too)
       if (touched != null && touched !== touching.current[hand]) {
         buzz(hand, PULSE.touch);
         nextBuzz.current[hand] = now + BUZZ_EVERY;

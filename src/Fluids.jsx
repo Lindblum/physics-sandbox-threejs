@@ -8,6 +8,7 @@ import { AIR_DENSITY, materialById } from './materials.js';
 import { shapeOf } from './shapes.js';
 import { GROUPS, lookMaterial, lookOf, onLooksChanged } from './Physics.jsx';
 import { ClothSheet } from './Cloth.jsx';
+import { pours, useGrainPointer } from './grains.js';
 
 // Things made of grains rather than one solid (a material's `simulation`
 // column): the shape a tool makes is filled with grains, each its own Rapier
@@ -27,6 +28,8 @@ import { ClothSheet } from './Cloth.jsx';
 // A pour is as many grains as its volume holds, at about the material's
 // grain_count for a 10 cm cube's worth, and MAX_GRAINS in all (the oldest
 // pours go). Its grains that fall off the disc go; a pour with none left goes.
+// A hand or the mouse takes a handful of them (see grains.js), and pointed at
+// or held, a pour shows its material and mass (see MaterialLabels).
 
 export const MAX_GRAINS = 2400;
 const MIN_PER_POUR = 20;
@@ -110,7 +113,7 @@ function grainPoints(def, material, detail = 1) {
  * One pour: its grains made in the world (and taken out after), drawn as one
  * instanced mesh (and a liquid's, with `smooth`, as one surface round them).
  */
-function Pour({ def, pours, setBodies, onClick, smooth, detail, resolution }) {
+function Pour({ def, setBodies, onClick, smooth, detail, resolution, grabs, pointed }) {
   const { world, rapier } = useRapier();
   const mesh = useRef(null);
   const material = materialById(def.material);
@@ -126,6 +129,8 @@ function Pour({ def, pours, setBodies, onClick, smooth, detail, resolution }) {
     return mc;
   }, [liquid, smooth, material, resolution]);
   useEffect(() => () => surface?.geometry.dispose(), [surface]);
+  const surfaceRef = useRef(null);
+  surfaceRef.current = surface;
   if (surface) surface.material = surfaceLook(material); // (made again when Video's looks change)
 
   useEffect(() => {
@@ -141,8 +146,12 @@ function Pour({ def, pours, setBodies, onClick, smooth, detail, resolution }) {
       if (def.linvel) desc.setLinvel(...def.linvel);
       const body = world.createRigidBody(desc);
       const box = grains.radius * GRAIN_BOX;
-      const collider = (granular ? rapier.ColliderDesc.cuboid(box, box, box) : rapier.ColliderDesc.ball(grains.radius * 0.9))
-        .setDensity(material.density)
+      const ball = grains.radius * 0.9;
+      // each grain weighs its share of the pour (the space it stands for, not just its collider's)
+      const share = (2 * grains.radius) ** 3;
+      const held = granular ? (2 * box) ** 3 : (4 / 3) * Math.PI * ball ** 3;
+      const collider = (granular ? rapier.ColliderDesc.cuboid(box, box, box) : rapier.ColliderDesc.ball(ball))
+        .setDensity((material.density * share) / held)
         .setFriction(granular ? material.friction : Math.max(material.friction, WET_FRICTION))
         .setRestitution(material.restitution)
         .setFrictionCombineRule(rapier.CoefficientCombineRule.Min)
@@ -150,7 +159,7 @@ function Pour({ def, pours, setBodies, onClick, smooth, detail, resolution }) {
       world.createCollider(collider, body);
       return body;
     });
-    const pour = { def, material, radius: grains.radius, bodies };
+    const pour = { def, material, radius: grains.radius, bodies, meshes: () => [surfaceRef.current, mesh.current] };
     pours.set(def.id, pour);
     fluidGrains.set(def.id, {
       material,
@@ -171,7 +180,7 @@ function Pour({ def, pours, setBodies, onClick, smooth, detail, resolution }) {
     if (!pour || (!m && !surface)) return;
     let gone = false;
     pour.bodies = pour.bodies.filter((b) => {
-      if (b.translation().y >= FALLEN_Y) return true;
+      if (b.translation().y >= FALLEN_Y || b.isKinematic()) return true; // (held ones stay)
       world.removeRigidBody(b);
       gone = true;
       return false;
@@ -186,19 +195,23 @@ function Pour({ def, pours, setBodies, onClick, smooth, detail, resolution }) {
       });
       m.count = strays.length;
       m.instanceMatrix.needsUpdate = true;
+      m.boundingSphere = null; // (where they are now, for pointing at them: worked out again when next needed)
     }
   });
 
+  const handlers = { ...useGrainPointer(def.id, grabs, pointed), onClick: (e) => onClick(e, def.id) };
+  if (surface) surface.userData.pourId = def.id;
   return (
     <>
-      {surface && <primitive object={surface} onClick={(e) => onClick(e, def.id)} />}
+      {surface && <primitive object={surface} {...handlers} />}
       <instancedMesh
-      ref={mesh}
-      args={[GEOMETRY[material.simulation] ?? GEOMETRY.liquid, lookOf(material), grains.points.length]}
-      frustumCulled={false}
-      castShadow
-      receiveShadow
-      onClick={(e) => onClick(e, def.id)}
+        ref={mesh}
+        args={[GEOMETRY[material.simulation] ?? GEOMETRY.liquid, lookOf(material), grains.points.length]}
+        frustumCulled={false}
+        castShadow
+        receiveShadow
+        userData={{ pourId: def.id }}
+        {...handlers}
       />
     </>
   );
@@ -335,13 +348,13 @@ function liquidForces(pours, dt) {
  * Every pour among `bodies` (those with `fluid`), and their liquids' forces;
  * `smooth`: Video → Liquid Surfaces (metaballs), `resolution`: Liquid Surface
  * Detail (the metaballs' grid); `grainDetail`, `clothDetail`: Physics → Grain
- * Detail and Cloth Detail (for what's made from now on).
+ * Detail and Cloth Detail (for what's made from now on); `grabs(e)`: whether
+ * a press picks some up, `pointed`: pointer id -> object id (for labels).
  * `setBodies` takes a pour away when it's gone, or the oldest when there are
  * more than MAX_GRAINS grains; `onClick(e, id)`: a click on the grains (the
  * tools: see Scene.jsx); cloth (see Cloth.jsx): `grabs(e)`, whether a press picks it up.
  */
-export function Fluids({ bodies, setBodies, onClick, smooth, grabs, resolution, grainDetail, clothDetail }) {
-  const pours = useMemo(() => new Map(), []);
+export function Fluids({ bodies, setBodies, onClick, smooth, grabs, pointed, resolution, grainDetail, clothDetail }) {
   useBeforePhysicsStep((world) => liquidForces(pours, world.timestep));
   // too many grains: the oldest pour goes
   useFrame(() => {
@@ -354,8 +367,10 @@ export function Fluids({ bodies, setBodies, onClick, smooth, grabs, resolution, 
   return bodies.map((def) => {
     if (!def.fluid) return null;
     const material = materialById(def.material);
-    if (material.simulation === 'cloth')
-      return <ClothSheet key={def.id} def={def} material={material} pours={pours} fluidGrains={fluidGrains} setBodies={setBodies} onClick={onClick} grabs={grabs} detail={clothDetail} />;
-    return <Pour key={def.id} def={def} pours={pours} setBodies={setBodies} onClick={onClick} smooth={smooth} detail={grainDetail} resolution={resolution} />;
+    if (material.simulation === 'cloth' || material.simulation === 'soft')
+      return (
+        <ClothSheet key={def.id} def={def} material={material} fluidGrains={fluidGrains} setBodies={setBodies} onClick={onClick} grabs={grabs} pointed={pointed} detail={clothDetail} />
+      );
+    return <Pour key={def.id} def={def} setBodies={setBodies} onClick={onClick} smooth={smooth} detail={grainDetail} resolution={resolution} grabs={grabs} pointed={pointed} />;
   });
 }

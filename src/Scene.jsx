@@ -14,6 +14,7 @@ import { FramePacing } from './FramePacing.jsx';
 import { Physics, useRapier } from '@react-three/rapier';
 import { AirDrag, ContactSounds, Disc, GlowLights, Holds, MaterialLabels, Particles, SandboxBodies, makeBody, particles, setLookQuality, transformMatrix, withMade } from './Physics.jsx';
 import { SHAPES, restingPosition, shapeOf, wireOf } from './shapes.js';
+import { AxisGizmo } from './Gizmo.jsx';
 import { materialById, randomMaterial } from './materials.js';
 import { Fluids } from './Fluids.jsx';
 import { PhoneStereoCameraFeed, PhoneStereoXR } from './PhoneStereo.jsx';
@@ -207,6 +208,28 @@ function RestoreViewAfterXR() {
   return null;
 }
 
+/**
+ * The mouse's hover, kept up with the scene: pointers are only checked again
+ * when they move, so an object moving under a still mouse would leave its
+ * label (and what a press takes) on the one that was there. Each frame, the
+ * last pointer move is checked again. And the mouse leaving the 3D view
+ * (onto a panel, say) points at nothing. `pointed`: pointer id -> object id.
+ */
+function HoverUpdate({ pointed }) {
+  const events = useThree((s) => s.events);
+  const gl = useThree((s) => s.gl);
+  useFrame(() => {
+    if (!gl.xr.isPresenting) events.update?.();
+  });
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const leave = () => pointed.clear();
+    canvas.addEventListener('pointerleave', leave);
+    return () => canvas.removeEventListener('pointerleave', leave);
+  }, [gl, pointed]);
+  return null;
+}
+
 /** Gravity turned back on (or off): everything asleep wakes, to fall (or float). */
 function WakeOnGravity({ gravity }) {
   const { world } = useRapier();
@@ -277,7 +300,6 @@ function Player({ origin, panels, registry, holds, textSize, homeScale, onScale,
 const DRAG = 'pointer'; // who holds an object dragged with Select (see Holds)
 const CLICK_SLOP = 6; // px a click may move and still be one (more: orbiting the view)
 const DRAG_RANGE = [0.2, 20]; // m: how near and far the mouse wheel brings a dragged object
-const STRETCH = { min: 0.2, max: 10 }; // Shift + middle-drag: how much shorter or longer a stretch makes an object, at a time
 
 /**
  * Which pointers work the tools: the mouse, a touch screen, controller rays
@@ -311,10 +333,9 @@ function made(spec, position, quaternion) {
  * The tools on the objects and the disc. Select: press on an object to pick it
  * up; it follows the pointer at the distance it was taken from (the mouse
  * wheel moves it nearer or further), and let go it's thrown. The middle
- * button does the same with any tool, as a controller's grip does; with Shift,
- * it stretches the object along the drag instead (its far side stays put, the
- * side taken follows the pointer: out longer, in shorter), and `onResize(id,
- * transform)` keeps its new shape when it's let go. Copy: a click on an
+ * button does the same with any tool, as a controller's grip does. Select's
+ * press also selects it (`setSelected(id)`; a click on the disc, none): its
+ * frame shows, to stretch it by (see Gizmo.jsx). Copy: a click on an
  * object takes it (`setClip`); Delete: takes it away. The shapes, and Paste:
  * a wireframe (`preview`, a ref) shows where one would go, resting on what the
  * mouse is over, and a click makes it there, of the Material chosen (or a
@@ -323,7 +344,7 @@ function made(spec, position, quaternion) {
  * (pointer id -> object id), for its label. Returns [handlers(id) for an
  * object's mesh, handlers for the disc's, click(e, id) for the grains'].
  */
-function useTools({ tool, material, clip, setClip, registry, bodies, holds, setBodies, pointed, onResize, preview, xrPlaces }) {
+function useTools({ tool, material, clip, setClip, registry, bodies, holds, setBodies, pointed, setSelected, preview, xrPlaces }) {
   const spec = placingSpec(tool, material, clip);
   const controls = useThree((s) => s.controls);
   const drag = useRef(null); // { id, pointerId, ray, distance, offset }
@@ -337,60 +358,15 @@ function useTools({ tool, material, clip, setClip, registry, bodies, holds, setB
       if (controls) controls.enabled = true;
       return;
     }
-    if (d.stretch) stretchTo(d, d.ray.at(d.distance, _hand));
-    else holds.move(d.id, DRAG, d.ray.at(d.distance, _hand).add(d.offset));
+    holds.move(d.id, DRAG, d.ray.at(d.distance, _hand).add(d.offset));
   });
-
-  /** Shift + middle-drag: the object stretched (or squashed) along the drag, from where it was taken to `to`. */
-  const stretchTo = (d, to) => {
-    const { start, center, quaternion, transform } = d.stretch;
-    const entry = registry.get(d.id);
-    if (!entry) return;
-    const move = to.clone().sub(start);
-    const length = move.length();
-    if (length < 0.002) return;
-    const axis = move.divideScalar(length);
-    // how far it reaches along the drag, each way from its centre (its shape as it was, turned as it is)
-    let ahead = 0;
-    let behind = 0;
-    for (const piece of entry.shape.hull)
-      for (const p of piece) {
-        const along = _hand.copy(p).applyMatrix3(transform).applyQuaternion(quaternion).dot(axis);
-        ahead = Math.max(ahead, along);
-        behind = Math.max(behind, -along);
-      }
-    const span = ahead + behind;
-    // out from the centre: longer by the drag; toward it: shorter
-    const outward = Math.sign(start.clone().sub(center).dot(axis)) || 1;
-    const f = THREE.MathUtils.clamp((span + outward * length) / span, STRETCH.min, STRETCH.max);
-    // the far side stays put
-    const near = outward > 0 ? behind : ahead;
-    const position = center.clone().addScaledVector(axis, outward * (f - 1) * near);
-    const g = f - 1;
-    const stretch = new THREE.Matrix3().set(
-      1 + g * axis.x * axis.x, g * axis.x * axis.y, g * axis.x * axis.z,
-      g * axis.y * axis.x, 1 + g * axis.y * axis.y, g * axis.y * axis.z,
-      g * axis.z * axis.x, g * axis.z * axis.y, 1 + g * axis.z * axis.z,
-    );
-    // in its own space: R⁻¹ S R T (it turns rigidly; the stretch is its resizing)
-    const turn = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(quaternion));
-    const resized = turn.clone().transpose().multiply(stretch).multiply(turn).multiply(transform);
-    d.stretch.now = resized;
-    holds.move(d.id, DRAG, position, quaternion);
-    entry.preview = (entry.preview ?? new THREE.Matrix4()).setFromMatrix3(resized);
-  };
 
   const endDrag = (e) => {
     const d = drag.current;
     if (!d || d.pointerId !== e.pointerId) return;
     drag.current = null;
     e.target?.releasePointerCapture?.(e.pointerId);
-    if (d.stretch) {
-      // stretched: it keeps its new shape, and stays where it is
-      const t = d.stretch.now?.elements;
-      if (t) onResize(d.id, t.every((x, i) => Math.abs(x - (i % 4 === 0 ? 1 : 0)) < 1e-4) ? undefined : [...t]);
-      holds.release(d.id, DRAG, true);
-    } else holds.release(d.id, DRAG);
+    holds.release(d.id, DRAG);
     if (controls) controls.enabled = true;
   };
 
@@ -418,6 +394,10 @@ function useTools({ tool, material, clip, setClip, registry, bodies, holds, setB
   /** A click (or a controller's trigger) on object `id` (null: the disc), with the tool in use. */
   const click = (e, id = null) => {
     // (an XR pointer's click has no `delta`: reading it throws; a trigger resizing an object isn't a click)
+    if (tool === 'select' && toolPointer(e)) {
+      if (id != null) e.stopPropagation(); // (not on to the disc behind it)
+      else if (e.internalPointer || (e.delta ?? 0) <= CLICK_SLOP) setSelected(null); // (the disc: none selected)
+    }
     if (!toolPointer(e) || (!e.internalPointer && (e.delta ?? 0) > CLICK_SLOP) || holds.resizing || tool === 'select') return;
     if (tool === 'copy' || tool === 'delete') {
       if (id == null) return;
@@ -447,18 +427,7 @@ function useTools({ tool, material, clip, setClip, registry, bodies, holds, setB
       if (!holds.take(id, DRAG)) return;
       const position = registry.get(id).mesh.current.getWorldPosition(new THREE.Vector3());
       drag.current = { id, pointerId: e.pointerId, ray: e.ray.clone(), distance: e.distance, offset: position.clone().sub(e.point) };
-      if (button === 1 && e.shiftKey) {
-        // Shift: stretching it, not moving it
-        const h = holds.map.get(id);
-        const def = registry.get(id).def;
-        drag.current.stretch = {
-          start: e.point.clone(),
-          center: h.position.clone(),
-          quaternion: h.quaternion.clone(),
-          transform: def.transform ? new THREE.Matrix3().fromArray(def.transform) : new THREE.Matrix3(),
-          now: null,
-        };
-      }
+      if (tool === 'select') setSelected(id);
       e.target?.setPointerCapture?.(e.pointerId);
       if (controls) controls.enabled = false;
       cursor('grabbing');
@@ -590,6 +559,8 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
     const body = made(what, position, quaternion);
     setBodies((list) => withMade(list, body));
   };
+  // the object Select picked last (its frame shows, to stretch it by)
+  const [selected, setSelected] = useState(null);
   const [handlers, discHandlers, click] = useTools({
     tool: state.tool,
     material: state.material,
@@ -600,7 +571,7 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
     holds,
     setBodies,
     pointed,
-    onResize,
+    setSelected,
     preview: mousePreview,
     xrPlaces: inSession && hasControllers,
   });
@@ -654,13 +625,16 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
           resolution={state.liquidDetail}
           grainDetail={state.grainDetail}
           clothDetail={state.clothDetail}
-          // (cloth: picked up by Select's left button, or the middle one)
+          // (picked up by Select's left button, or the middle one; their labels, pointed at)
           grabs={(e) => !e.internalPointer && ((state.tool === 'select' && (e.button ?? 0) === 0) || e.button === 1)}
+          pointed={pointed}
         />
       </Physics>
       <Particles registry={registry} />
       {state.glowLights && <GlowLights registry={registry} />}
-      <MaterialLabels registry={registry} holds={holds} pointed={pointed} viewScale={viewScale} />
+      <MaterialLabels registry={registry} holds={holds} pointed={pointed} viewScale={viewScale} selected={state.tool === 'select' ? selected : null} />
+      <AxisGizmo selected={state.tool === 'select' ? selected : null} registry={registry} holds={holds} onResize={onResize} viewScale={viewScale} />
+      <HoverUpdate pointed={pointed} />
       {state.grid && <Grid />}
       <Preview spec={spec} previewRef={mousePreview} />
       <Preview spec={spec} previewRef={leftPreview} />

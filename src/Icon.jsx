@@ -187,6 +187,8 @@ const liquidDrops = drawn('M7.5 7.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0ZM16.25 9
 
 // Copy: two sheets, one over the other; Grid: a lattice
 const copy = drawn('M8.75 8.75h10.5v10.5H8.75ZM15.25 8.75v-4H4.75v10.5h4');
+// a pencil
+const pencil = drawn('M15.75 4.75 19.25 8.25 8.5 19H5v-3.5ZM13.25 7.25l3.5 3.5');
 const grid = drawn('M4.75 4.75h14.5v14.5H4.75ZM9.6 4.75v14.5M14.4 4.75v14.5M4.75 9.6h14.5M4.75 14.4h14.5');
 
 const ICONS = {
@@ -215,6 +217,7 @@ const ICONS = {
   off: recolour(ban),
   solid,
   gear: recolour(gear),
+  edit: pencil,
   skybox: recolour(globe),
   passthrough: recolour(picture),
   rotate: recolour(rotate),
