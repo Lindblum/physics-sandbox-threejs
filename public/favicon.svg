@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<style>g{stroke:#000}@media (prefers-color-scheme:dark){g{stroke:#fff}}</style>
+<g fill="none" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+<ellipse cx="32" cy="50" rx="28" ry="8"/>
+<path d="M17 24l11 5v13l-11-5zM28 29l11-5v13l-11 5zM17 24l11-5 11 5"/>
+<circle cx="47" cy="14" r="7"/>
+</g>
+</svg>
