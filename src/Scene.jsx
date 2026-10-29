@@ -12,8 +12,8 @@ import { Probes, useControllerGrips } from './Grab.jsx';
 import { SOLID_BACKGROUND } from './menu.js';
 import { FramePacing } from './FramePacing.jsx';
 import { Physics, useRapier } from '@react-three/rapier';
-import { AirDrag, ContactSounds, Disc, GlowLights, Holds, MaterialLabels, Particles, SandboxBodies, makeBody, particles, setLookQuality, withMade } from './Physics.jsx';
-import { shapeOf } from './shapes.js';
+import { AirDrag, ContactSounds, Disc, GlowLights, Holds, MaterialLabels, Particles, SandboxBodies, makeBody, particles, setLookQuality, transformMatrix, withMade } from './Physics.jsx';
+import { SHAPES, restingPosition, shapeOf, wireOf } from './shapes.js';
 import { materialById, randomMaterial } from './materials.js';
 import { Fluids } from './Fluids.jsx';
 import { PhoneStereoCameraFeed, PhoneStereoXR } from './PhoneStereo.jsx';
@@ -188,12 +188,27 @@ const _hand = new THREE.Vector3();
  * player's size (the scene scale's inverse); `onScale(scale)` hears it
  * change; `resetScale` changing puts it back to real size, where you stand.
  */
-function Player({ origin, panels, registry, holds, textSize, homeScale, onScale, onResize, resetScale, children }) {
+function Player({ origin, panels, registry, holds, textSize, homeScale, onScale, onResize, resetScale, placing, onPlace, surfaces, previews, children }) {
   const left = useRef(null);
   const right = useRef(null);
   const probes = useMemo(() => ({ left, right }), []);
   const gl = useThree((s) => s.gl);
-  const holding = useControllerGrips({ panels, origin, registry, holds, probes, textSize, home: MENU_HOME, homeScale, onScale, onResize });
+  const holding = useControllerGrips({
+    panels,
+    origin,
+    registry,
+    holds,
+    probes,
+    textSize,
+    home: MENU_HOME,
+    homeScale,
+    onScale,
+    onResize,
+    placing,
+    onPlace,
+    surfaces,
+    previews,
+  });
   // back to real size: the floor the real floor again, your head where it was over it
   useEffect(() => {
     const o = origin.current;
@@ -248,19 +263,44 @@ const STRETCH = { min: 0.2, max: 10 }; // Shift + middle-drag: how much shorter 
 const toolPointer = (e) => !e.internalPointer || e.pointerType === 'ray';
 
 /**
+ * What a shape tool or Paste would make now: { shape, material (an id, or
+ * 'random'), transform?, name? }, or null with another tool (or nothing copied).
+ */
+function placingSpec(tool, material, clip) {
+  if (SHAPES[tool]) return { shape: tool, material };
+  return tool === 'paste' ? clip : null;
+}
+
+const _yaw = new THREE.Quaternion();
+
+/** Something `spec` describes, made at `position`, turned by `quaternion` (Physics.jsx makeBody; a liquid, sand or cloth a pour of grains). */
+function made(spec, position, quaternion) {
+  const id = spec.material === 'random' ? randomMaterial().id : spec.material;
+  const rotation = new THREE.Euler().setFromQuaternion(quaternion);
+  return makeBody(spec.shape, id, position.toArray(), [rotation.x, rotation.y, rotation.z], false, {
+    ...(spec.transform && { transform: spec.transform }),
+    ...(materialById(id).simulation && { fluid: true }),
+  });
+}
+
+/**
  * The tools on the objects and the disc. Select: press on an object to pick it
  * up; it follows the pointer at the distance it was taken from (the mouse
  * wheel moves it nearer or further), and let go it's thrown. The middle
  * button does the same with any tool, as a controller's grip does; with Shift,
  * it stretches the object along the drag instead (its far side stays put, the
  * side taken follows the pointer: out longer, in shorter), and `onResize(id,
- * transform)` keeps its new shape when it's let go. The shapes: a
- * click (or a controller's trigger) on the disc or an object makes one there,
- * resting on the face clicked, of the Material chosen (or a random one). Any
- * pointer over an object puts it in `pointed` (pointer id -> object id), for
- * its label. Returns [handlers(id) for an object's mesh, the disc's onClick].
+ * transform)` keeps its new shape when it's let go. Copy: a click on an
+ * object takes it (`setClip`); Delete: takes it away. The shapes, and Paste:
+ * a wireframe (`preview`, a ref) shows where one would go, resting on what the
+ * mouse is over, and a click makes it there, of the Material chosen (or a
+ * random one) or as copied; in XR the controllers place them, with their
+ * triggers (see Grab.jsx). Any pointer over an object puts it in `pointed`
+ * (pointer id -> object id), for its label. Returns [handlers(id) for an
+ * object's mesh, handlers for the disc's, click(e, id) for the grains'].
  */
-function useTools({ tool, material, registry, holds, setBodies, pointed, onResize }) {
+function useTools({ tool, material, clip, setClip, registry, bodies, holds, setBodies, pointed, onResize, preview, xrPlaces }) {
+  const spec = placingSpec(tool, material, clip);
   const controls = useThree((s) => s.controls);
   const drag = useRef(null); // { id, pointerId, ray, distance, offset }
 
@@ -330,18 +370,46 @@ function useTools({ tool, material, registry, holds, setBodies, pointed, onResiz
     if (controls) controls.enabled = true;
   };
 
-  const make = (e) => {
-    // (an XR pointer's click has no `delta`: reading it throws; a trigger resizing an object isn't a click)
-    if (tool === 'select' || !toolPointer(e) || (!e.internalPointer && (e.delta ?? 0) > CLICK_SLOP) || !e.point || holds.resizing) return;
-    e.stopPropagation();
-    // out from the face clicked, resting on it (a sliver apart, so they don't start overlapping)
+  /** Where a click at `e` would put what's being placed: resting on the face under it (turned square to the world). */
+  const restingAt = (e) => {
     const normal = e.face ? e.face.normal.clone().transformDirection(e.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
-    const shape = shapeOf(tool);
-    const half = Math.abs(normal.y) > 0.7 ? shape.half : shape.radius;
-    const at = e.point.clone().addScaledVector(normal, half + 0.005);
-    const made = material === 'random' ? randomMaterial().id : material;
-    // (a liquid or sand: a pour of grains, see Fluids.jsx)
-    setBodies((list) => withMade(list, makeBody(tool, made, at.toArray(), undefined, false, materialById(made).simulation ? { fluid: true } : {})));
+    return restingPosition(spec.shape, spec.transform, e.point, normal);
+  };
+
+  // the mouse's wireframe: on the face it's over
+  const showPreview = (e) => {
+    const p = preview.current;
+    if (!p) return;
+    if (!spec || e.internalPointer || !e.point || drag.current) {
+      p.visible = false;
+      return;
+    }
+    p.matrix.compose(restingAt(e), _yaw.identity(), _one).multiply(transformMatrix(spec.transform));
+    p.visible = true;
+  };
+  const hidePreview = (e) => {
+    if (!e.internalPointer && preview.current) preview.current.visible = false;
+  };
+
+  /** A click (or a controller's trigger) on object `id` (null: the disc), with the tool in use. */
+  const click = (e, id = null) => {
+    // (an XR pointer's click has no `delta`: reading it throws; a trigger resizing an object isn't a click)
+    if (!toolPointer(e) || (!e.internalPointer && (e.delta ?? 0) > CLICK_SLOP) || holds.resizing || tool === 'select') return;
+    if (tool === 'copy' || tool === 'delete') {
+      if (id == null) return;
+      e.stopPropagation();
+      const def = registry.get(id)?.def ?? bodies.find((b) => b.id === id);
+      if (!def) return;
+      if (tool === 'delete') setBodies((list) => list.filter((b) => b.id !== id));
+      else setClip({ shape: def.shape, material: def.material, ...(def.transform && { transform: def.transform }), name: `${materialById(def.material).name} ${shapeOf(def.shape).label}` });
+      return;
+    }
+    if (!spec || !e.point) return;
+    // (in XR the triggers place them, at their wireframes)
+    if (e.internalPointer && xrPlaces) return;
+    e.stopPropagation();
+    const body = made(spec, restingAt(e), _yaw.identity());
+    setBodies((list) => withMade(list, body));
   };
 
   const cursor = (value) => (document.body.style.cursor = value);
@@ -374,6 +442,7 @@ function useTools({ tool, material, registry, holds, setBodies, pointed, onResiz
     onPointerMove: (e) => {
       const d = drag.current;
       if (d?.pointerId === e.pointerId) d.ray.copy(e.ray);
+      showPreview(e);
     },
     onPointerUp: (e) => {
       if (drag.current?.pointerId !== e.pointerId) return;
@@ -388,7 +457,7 @@ function useTools({ tool, material, registry, holds, setBodies, pointed, onResiz
       const deltaY = e.deltaY ?? e.nativeEvent?.deltaY ?? 0;
       d.distance = THREE.MathUtils.clamp(d.distance * Math.exp(deltaY * 0.001), ...DRAG_RANGE);
     },
-    onClick: make,
+    onClick: (e) => click(e, id),
     onPointerOver: (e) => {
       if (!toolPointer(e)) return;
       e.stopPropagation();
@@ -398,9 +467,60 @@ function useTools({ tool, material, registry, holds, setBodies, pointed, onResiz
     onPointerOut: (e) => {
       if (pointed.get(e.pointerId) === id) pointed.delete(e.pointerId);
       if (!e.internalPointer && !drag.current) cursor('');
+      hidePreview(e);
     },
   });
-  return [handlers, make];
+  const disc = { onClick: (e) => click(e, null), onPointerMove: showPreview, onPointerOut: hidePreview };
+  return [handlers, disc, click];
+}
+
+const _one = new THREE.Vector3(1, 1, 1);
+const WIRE_MATERIAL = new THREE.LineBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.75, depthWrite: false });
+
+/** A wireframe of what `spec` would make, placed (its matrix) by whoever shows it. */
+function Preview({ spec, previewRef }) {
+  return (
+    <lineSegments
+      ref={previewRef}
+      geometry={wireOf(spec?.shape ?? 'cube')}
+      material={WIRE_MATERIAL}
+      matrixAutoUpdate={false}
+      visible={false}
+      renderOrder={5}
+      raycast={() => null}
+    />
+  );
+}
+
+const GRID = { step: 0.1, radius: 1, height: 2 }; // m: Video → Show Grid: lines this far apart, over the disc, up to this high
+
+/** Video → Show Grid: thin grey lines every 10 cm through the space over the disc (a cylinder as wide as it, 2 m high). */
+function Grid() {
+  const geometry = useMemo(() => {
+    const points = [];
+    const n = Math.round(GRID.radius / GRID.step);
+    const levels = Math.round(GRID.height / GRID.step);
+    for (let i = -n; i <= n; i++) {
+      const a = i * GRID.step;
+      const reach = Math.sqrt(Math.max(0, GRID.radius ** 2 - a * a)); // (as far as the disc's edge)
+      for (let k = 0; k <= levels; k++) {
+        const y = k * GRID.step;
+        points.push(-reach, y, a, reach, y, a); // along x
+        points.push(a, y, -reach, a, y, reach); // along z
+      }
+      for (let j = -n; j <= n; j++) {
+        const b = j * GRID.step;
+        if (a * a + b * b <= GRID.radius ** 2) points.push(a, 0, b, a, GRID.height, b); // up
+      }
+    }
+    return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+  }, []);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  return (
+    <lineSegments geometry={geometry} raycast={() => null}>
+      <lineBasicMaterial color="#9aa0a8" transparent opacity={0.22} depthWrite={false} />
+    </lineSegments>
+  );
 }
 
 /**
@@ -409,7 +529,7 @@ function useTools({ tool, material, registry, holds, setBodies, pointed, onResiz
  * `bodies` / `setBodies`: the objects (see Physics.jsx); `registry`: their bodies, by id.
  * `menuOverlay`: the page shows Options over the scene (Phone AR), so no panel in it.
  */
-export default function Scene({ state, panels, onSelect, menuOverlay, phone, bodies, setBodies, registry, onScale, resetScale }) {
+export default function Scene({ state, panels, onSelect, menuOverlay, phone, bodies, setBodies, registry, onScale, resetScale, setClip }) {
   const inSession = useXR((s) => s.mode === 'immersive-vr' || s.mode === 'immersive-ar');
   const inAR = useXR((s) => s.mode === 'immersive-ar');
   // a phone's AR session drawn as two lens-corrected eyes
@@ -431,7 +551,34 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   const holds = useMemo(() => new Holds(registry), [registry]);
   // an object resized with both hands keeps its new size (see Grab.jsx)
   const onResize = (id, transform) => setBodies((list) => list.map((b) => (b.id === id ? { ...b, transform } : b)));
-  const [handlers, make] = useTools({ tool: state.tool, material: state.material, registry, holds, setBodies, pointed, onResize });
+  // the shapes' and Paste's wireframes: the mouse's, and each controller's
+  const mousePreview = useRef(null);
+  const leftPreview = useRef(null);
+  const rightPreview = useRef(null);
+  const previews = useMemo(() => ({ left: leftPreview, right: rightPreview }), []);
+  const discMesh = useRef(null);
+  const spec = placingSpec(state.tool, state.material, state.clip);
+  const placing = useRef(spec);
+  placing.current = spec;
+  const surfaces = () => [discMesh.current, ...[...registry.values()].map((e) => e.mesh.current)].filter(Boolean);
+  const onPlace = (what, position, quaternion) => {
+    const body = made(what, position, quaternion);
+    setBodies((list) => withMade(list, body));
+  };
+  const [handlers, discHandlers, click] = useTools({
+    tool: state.tool,
+    material: state.material,
+    clip: state.clip,
+    setClip,
+    registry,
+    bodies,
+    holds,
+    setBodies,
+    pointed,
+    onResize,
+    preview: mousePreview,
+    xrPlaces: inSession && hasControllers,
+  });
   const menuPanel = useRef(null);
   const viewPanel = useRef(null);
   const toolsPanel = useRef(null);
@@ -465,20 +612,35 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
       <Lights shadows={state.shadows} />
       <Physics gravity={state.gravity ? GRAVITY : NO_GRAVITY} paused={state.paused}>
         <WakeOnGravity gravity={state.gravity} />
-        <Disc onClick={make} colliderRef={discCollider} />
+        <Disc colliderRef={discCollider} meshRef={discMesh} handlers={discHandlers} />
         <SandboxBodies bodies={bodies} setBodies={setBodies} registry={registry} holds={holds} handlers={handlers} />
         <AirDrag registry={registry} />
-        <ContactSounds registry={registry} disc={discCollider} holds={holds} />
-        <Fluids bodies={bodies} setBodies={setBodies} onClick={make} smooth={state.liquidSurfaces} />
+        <ContactSounds registry={registry} disc={discCollider} holds={holds} onDeform={onResize} />
+        <Fluids
+          bodies={bodies}
+          setBodies={setBodies}
+          onClick={click}
+          smooth={state.liquidSurfaces}
+          // (cloth: picked up by Select's left button, or the middle one)
+          grabs={(e) => !e.internalPointer && ((state.tool === 'select' && (e.button ?? 0) === 0) || e.button === 1)}
+        />
       </Physics>
       <Particles registry={registry} />
       {state.glowLights && <GlowLights registry={registry} />}
       <MaterialLabels registry={registry} holds={holds} pointed={pointed} viewScale={viewScale} />
+      {state.grid && <Grid />}
+      <Preview spec={spec} previewRef={mousePreview} />
+      <Preview spec={spec} previewRef={leftPreview} />
+      <Preview spec={spec} previewRef={rightPreview} />
       <Player
         origin={origin}
         onScale={onScale}
         onResize={onResize}
         resetScale={resetScale}
+        placing={placing}
+        onPlace={onPlace}
+        surfaces={surfaces}
+        previews={previews}
         panels={panelRefs}
         registry={registry}
         holds={holds}

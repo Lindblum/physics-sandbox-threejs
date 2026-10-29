@@ -22,6 +22,8 @@ import volume from 'lineicons/assets/svgs/regular/volume-high.svg?raw';
 import volumeMute from 'lineicons/assets/svgs/regular/volume-mute.svg?raw';
 import palette from 'lineicons/assets/svgs/regular/colour-palette-3.svg?raw';
 import bulb from 'lineicons/assets/svgs/regular/bulb-2.svg?raw';
+import clipboard from 'lineicons/assets/svgs/regular/clipboard.svg?raw';
+import trash from 'lineicons/assets/svgs/regular/trash-3.svg?raw';
 import layers from 'lineicons/assets/svgs/regular/layers-1.svg?raw';
 import cloud from 'lineicons/assets/svgs/regular/cloud-2.svg?raw';
 import { SHAPES } from './shapes.js';
@@ -183,7 +185,16 @@ const shadows = drawn('M15.25 9a4.25 4.25 0 1 1-8.5 0 4.25 4.25 0 0 1 8.5 0ZM4.7
 const liquidSmooth = drawn('M12 3.25s6.25 6.6 6.25 10.75a6.25 6.25 0 0 1-12.5 0C5.75 9.85 12 3.25 12 3.25Z');
 const liquidDrops = drawn('M7.5 7.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0ZM16.25 9a3.25 3.25 0 1 1-6.5 0 3.25 3.25 0 0 1 6.5 0ZM12.75 17.5a2.75 2.75 0 1 1-5.5 0 2.75 2.75 0 0 1 5.5 0ZM21.25 16.25a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z');
 
+// Copy: two sheets, one over the other; Grid: a lattice
+const copy = drawn('M8.75 8.75h10.5v10.5H8.75ZM15.25 8.75v-4H4.75v10.5h4');
+const grid = drawn('M4.75 4.75h14.5v14.5H4.75ZM9.6 4.75v14.5M14.4 4.75v14.5M4.75 9.6h14.5M4.75 14.4h14.5');
+
 const ICONS = {
+  copy,
+  paste: recolour(clipboard),
+  delete: recolour(trash),
+  gridOn: grid,
+  gridOff: struck(grid),
   refractionOn: refraction,
   refractionOff: struck(refraction),
   shadowsOn: shadows,

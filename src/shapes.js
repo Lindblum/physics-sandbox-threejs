@@ -400,3 +400,30 @@ export function transformedShape(id, transform) {
   transformed.set(key, result);
   return result;
 }
+
+// a shape's wireframe, for showing where it would go: its edges (the round
+// ones drawn from a coarser mesh, so their lines are a lattice, not a blur)
+const wires = new Map();
+export function wireOf(id) {
+  if (wires.has(id)) return wires.get(id);
+  const coarse = {
+    sphere: () => new THREE.SphereGeometry(SPHERE_RADIUS, 16, 10),
+    cylinder: () => new THREE.CylinderGeometry(CYLINDER.radius, CYLINDER.radius, CYLINDER.height, 16),
+    torus: () => new THREE.TorusGeometry(TORUS.radius, TORUS.tube, 8, 24).rotateX(Math.PI / 2),
+  }[id];
+  const wire = new THREE.EdgesGeometry(coarse ? coarse() : shapeOf(id).geometry, 10);
+  wires.set(id, wire);
+  return wire;
+}
+
+/**
+ * Where something of shape `id`, resized by `transform` (or not), rests on a
+ * surface at `point`, facing out along `normal` (world): on it if the surface
+ * faces up (or down), beside it if it's a wall, a sliver apart. Returns its
+ * centre (turned only about the vertical, it reaches as far down as made).
+ */
+export function restingPosition(id, transform, point, normal) {
+  const m = transform ? transformedShape(id, transform) : shapeOf(id);
+  const reach = Math.abs(normal.y) > 0.7 ? m.half : m.radius;
+  return point.clone().addScaledVector(normal, reach + 0.005);
+}

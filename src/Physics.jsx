@@ -289,14 +289,14 @@ const _qi = new THREE.Quaternion();
 
 /**
  * The floor: a fixed disc of concrete, its top at y = 0. Clicks on it reach
- * `onClick`; `colliderRef` gets its collider. Its friction is high, so each
+ * `onClick` (and pointers reach `handlers`); `colliderRef` and `meshRef` get its collider and mesh. Its friction is high, so each
  * object's own decides how it slides on it.
  */
-export function Disc({ onClick, colliderRef }) {
+export function Disc({ onClick, colliderRef, meshRef, handlers }) {
   return (
     <RigidBody type="fixed" colliders={false} position={[0, -DISC.thickness / 2, 0]}>
       <CylinderCollider ref={colliderRef} args={[DISC.thickness / 2, DISC.radius]} friction={1} restitution={0.3} collisionGroups={GROUPS.disc} />
-      <mesh receiveShadow onClick={onClick} material={lookOf(DISC_MATERIAL)}>
+      <mesh ref={meshRef} receiveShadow onClick={onClick} material={lookOf(DISC_MATERIAL)} {...handlers}>
         <cylinderGeometry args={[DISC.radius, DISC.radius, DISC.thickness, 96]} />
       </mesh>
     </RigidBody>
@@ -540,6 +540,39 @@ function pointVelocity(b, p, out) {
 }
 
 const SLIDE_BUZZ_EVERY = 0.06; // s between the buzzes of something held sliding on another
+// clay: how much a strike squashes it, and how far out of shape it can go
+const SQUASH_PER_MS = 0.12; // a strike at 1 m/s (beyond the first 0.3) squashes it this much along the blow
+const SQUASH_MAX = 0.3; // at most this much a strike
+const SQUASH_ASPECT = 5; // no longer than this many times its narrowest
+const SQUASH_GAP = 0.15; // s between one object's squashes
+const _m3a = new THREE.Matrix3();
+const _m3b = new THREE.Matrix3();
+const _nl = new THREE.Vector3();
+
+/**
+ * Something plastic (clay) struck at `speed` m/s along world `normal`: its
+ * resizing squashed along the blow and spread round it (its volume kept).
+ * Returns the new 3×3 (column-major), or null if it's squashed out of shape enough.
+ */
+function squashed(entry, normal, speed) {
+  const amount = Math.min(SQUASH_MAX, entry.material.plasticity * Math.max(0, speed - 0.3) * SQUASH_PER_MS);
+  if (amount < 0.01) return null;
+  const s = 1 - amount;
+  const w = 1 / Math.sqrt(s);
+  // the blow in its own frame
+  _nl.copy(normal).applyQuaternion(_qa.copy(entry.body.current.rotation()).invert()).normalize();
+  const g = s - w;
+  const n = _nl;
+  _m3a.set(w + g * n.x * n.x, g * n.x * n.y, g * n.x * n.z, g * n.y * n.x, w + g * n.y * n.y, g * n.y * n.z, g * n.z * n.x, g * n.z * n.y, w + g * n.z * n.z);
+  _m3b.identity();
+  if (entry.def.transform) _m3b.fromArray(entry.def.transform);
+  const t = _m3a.multiply(_m3b);
+  // (how stretched: its longest axis over its shortest, roughly)
+  const e = t.elements;
+  const len = [0, 3, 6].map((c) => Math.hypot(e[c], e[c + 1], e[c + 2]));
+  if (Math.max(...len) / Math.min(...len) > SQUASH_ASPECT) return null;
+  return [...e];
+}
 // glue: a bond where something sticky touches, until it's pulled this far out of place
 const BOND_BREAK_M = 0.01;
 const BOND_BREAK_RAD = 0.35;
@@ -563,10 +596,11 @@ function localPoint(body, p) {
  * touch, sliding hisses (and buzzes softly, held) and a ball rolling rumbles.
  * Something sticky (glue) bonds to what it touches, the disc too, with a
  * fixed joint, until pulled out of place (by a hand, say), when it lets go.
- * Each frame the listener follows the viewer. `disc`: ref to the disc's
- * collider; `holds`: who holds what (see Holds).
+ * Something plastic (clay) is squashed where it strikes things, and stays so
+ * (`onDeform(id, transform)`). Each frame the listener follows the viewer.
+ * `disc`: ref to the disc's collider; `holds`: who holds what (see Holds).
  */
-export function ContactSounds({ registry, disc, holds }) {
+export function ContactSounds({ registry, disc, holds, onDeform }) {
   const { world, rapier } = useRapier();
   const pairs = useMemo(() => new Map(), []); // key -> { dv, struck, seen, unbonded }
   const bonds = useMemo(() => new Map(), []); // key -> { joint, b1, b2, a1, a2, turn (b1's rotation relative to b2's) }
@@ -645,7 +679,16 @@ export function ContactSounds({ registry, disc, holds }) {
             const speed = dv / (1 + bounce);
             impact(a.material, a.size, speed, mass, _a);
             impact(b.material, b.size, speed, mass, _a);
+            const blow = manifold.normal();
             for (const side of [a, b]) {
+              // clay: squashed along the blow
+              if (side.entry?.material.plasticity && now - (side.entry.squashedAt ?? 0) > SQUASH_GAP) {
+                const t = squashed(side.entry, blow, speed);
+                if (t) {
+                  side.entry.squashedAt = now;
+                  onDeform?.(side.key, t);
+                }
+              }
               particles.burst(side.material, _a, speed);
               if (side.entry?.material.jiggle) jiggle(side.entry, speed);
               // held: the hand feels it, harder the harder it struck
@@ -696,13 +739,17 @@ export function ContactSounds({ registry, disc, holds }) {
   return null;
 }
 
-// the labels over held and pointed-at objects: their material's name
+// the labels over held and pointed-at objects: their material's name and their mass
 const LABEL_FONT = '600 56px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 const LABEL_H_M = 0.045; // m: the label's height in the world, at scene scale 1
 const LABEL_GAP_M = 0.04; // m above the object's top
 const labelTextures = new Map();
 function labelTexture(text) {
   if (labelTextures.has(text)) return labelTextures.get(text);
+  if (labelTextures.size > 200) {
+    for (const t of labelTextures.values()) t.texture.dispose();
+    labelTextures.clear();
+  }
   const ctx = document.createElement('canvas').getContext('2d');
   ctx.font = LABEL_FONT;
   const w = Math.ceil(ctx.measureText(text).width) + 64;
@@ -728,12 +775,20 @@ function labelTexture(text) {
   return entry;
 }
 
+/** A mass as people say it: grams, kilograms or tonnes, to three figures. */
+export function massText(kg) {
+  const three = (v) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
+  if (kg < 1) return `${three(kg * 1000)} g`;
+  if (kg < 1000) return `${three(kg)} kg`;
+  return `${three(kg / 1000)} t`;
+}
+
 const LABELS = 6; // as many as can show at once: held by two grips and a pointer, pointed at by two rays and the mouse
 const _at = new THREE.Vector3();
 
 /**
  * Over each object held or pointed at (`pointed`: pointer id -> object id),
- * facing the viewer: its material's name. `viewScale()`: how much bigger
+ * facing the viewer: its material's name and its mass. `viewScale()`: how much bigger
  * than life the viewer is (the scene scale's inverse), so labels look the same size.
  */
 export function MaterialLabels({ registry, holds, pointed, viewScale }) {
@@ -744,7 +799,10 @@ export function MaterialLabels({ registry, holds, pointed, viewScale }) {
   );
   useEffect(() => () => materials.forEach((m) => m.dispose()), [materials]);
   const camera = useThree((s) => s.camera);
+  const gl = useThree((s) => s.gl);
   useFrame(() => {
+    // (the viewer: the headset's camera in XR, which the scene's camera doesn't follow)
+    const viewer = gl.xr.isPresenting ? gl.xr.getCamera() : camera;
     const ids = [...new Set([...holds.map.keys(), ...pointed.values()])];
     const shown = ids.map((id) => registry.get(id)).filter((e) => e?.mesh.current);
     const k = viewScale();
@@ -753,7 +811,8 @@ export function MaterialLabels({ registry, holds, pointed, viewScale }) {
       const entry = shown[i];
       sprite.visible = Boolean(entry);
       if (!entry) return;
-      const { texture, aspect } = labelTexture(entry.material.name);
+      const mass = entry.body.current?.mass();
+      const { texture, aspect } = labelTexture(mass ? `${entry.material.name} · ${massText(mass)}` : entry.material.name);
       if (sprite.material.map !== texture) {
         sprite.material.map = texture;
         sprite.material.needsUpdate = true;
@@ -763,7 +822,7 @@ export function MaterialLabels({ registry, holds, pointed, viewScale }) {
       const h = LABEL_H_M * k;
       sprite.position.set(_at.x, _at.y + entry.measure.radius + LABEL_GAP_M * k + h / 2, _at.z);
       // the same size on screen however far, but never smaller than life size up close
-      const far = Math.max(1, camera.getWorldPosition(_v).distanceTo(sprite.position) / (1.2 * k));
+      const far = Math.max(1, viewer.getWorldPosition(_v).distanceTo(sprite.position) / (1.2 * k));
       sprite.scale.set(h * aspect * far, h * far, 1);
     });
   });

@@ -7,6 +7,7 @@ import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { AIR_DENSITY, materialById } from './materials.js';
 import { shapeOf } from './shapes.js';
 import { GROUPS, lookMaterial, lookOf, onLooksChanged } from './Physics.jsx';
+import { ClothSheet } from './Cloth.jsx';
 
 // Things made of grains rather than one solid (a material's `simulation`
 // column): the shape a tool makes is filled with grains, each its own Rapier
@@ -191,14 +192,14 @@ function Pour({ def, pours, setBodies, onClick, smooth }) {
 
   return (
     <>
-      {surface && <primitive object={surface} onClick={onClick} />}
+      {surface && <primitive object={surface} onClick={(e) => onClick(e, def.id)} />}
       <instancedMesh
       ref={mesh}
       args={[GEOMETRY[material.simulation] ?? GEOMETRY.liquid, lookOf(material), grains.points.length]}
       frustumCulled={false}
       castShadow
       receiveShadow
-      onClick={onClick}
+      onClick={(e) => onClick(e, def.id)}
       />
     </>
   );
@@ -335,9 +336,10 @@ function liquidForces(pours, dt) {
  * Every pour among `bodies` (those with `fluid`), and their liquids' forces;
  * `smooth`: Video → Liquid Surfaces (metaballs).
  * `setBodies` takes a pour away when it's gone, or the oldest when there are
- * more than MAX_GRAINS grains; `onClick`: a click on the grains (the tools: see Scene.jsx).
+ * more than MAX_GRAINS grains; `onClick(e, id)`: a click on the grains (the
+ * tools: see Scene.jsx); cloth (see Cloth.jsx): `grabs(e)`, whether a press picks it up.
  */
-export function Fluids({ bodies, setBodies, onClick, smooth }) {
+export function Fluids({ bodies, setBodies, onClick, smooth, grabs }) {
   const pours = useMemo(() => new Map(), []);
   useBeforePhysicsStep((world) => liquidForces(pours, world.timestep));
   // too many grains: the oldest pour goes
@@ -348,5 +350,11 @@ export function Fluids({ bodies, setBodies, onClick, smooth }) {
     const oldest = Math.min(...pours.keys());
     setBodies((list) => list.filter((b) => b.id !== oldest));
   });
-  return bodies.map((def) => def.fluid && <Pour key={def.id} def={def} pours={pours} setBodies={setBodies} onClick={onClick} smooth={smooth} />);
+  return bodies.map((def) => {
+    if (!def.fluid) return null;
+    const material = materialById(def.material);
+    if (material.simulation === 'cloth')
+      return <ClothSheet key={def.id} def={def} material={material} pours={pours} fluidGrains={fluidGrains} setBodies={setBodies} onClick={onClick} grabs={grabs} />;
+    return <Pour key={def.id} def={def} pours={pours} setBodies={setBodies} onClick={onClick} smooth={smooth} />;
+  });
 }

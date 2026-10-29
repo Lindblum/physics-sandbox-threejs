@@ -2,7 +2,8 @@ import { useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { pulse, readControllers } from './grip.js';
-import { distanceOutside as shapeDistance } from './shapes.js';
+import { distanceOutside as shapeDistance, restingPosition } from './shapes.js';
+import { transformMatrix } from './Physics.jsx';
 
 // Touch controller grips: the objects, and the XR panels, as in grid-game-threejs.
 //
@@ -22,6 +23,11 @@ import { distanceOutside as shapeDistance } from './shapes.js';
 // grows or shrinks with the distance between them; with a trigger held, only
 // along that line (the line when the trigger was pressed), stretching it.
 // Let go of either grip and its new size is its own (its collider too).
+//
+// With a shape tool (or Paste) in hand, each controller shows a wireframe of
+// what it would make: on the surface its ray points at (turned the way it
+// points), or, pointing at nothing, round its probe (turned as the hand is).
+// Its trigger makes it there.
 //
 // The panels dock on a controller, stacked upward, tipped toward the eyes:
 // Options on the left, the View panel and the Tools panel above it on the
@@ -152,11 +158,15 @@ function distanceOutside(entry, p) {
  * position, rotation } without controllers, `homeScale` its scale there;
  * `textSize`: Accessibility → Text Size (the panels that much bigger);
  * `onScale(scale)`: the scene scale changed (both grips in mid-air);
- * `onResize(id, transform)`: an object was resized with both hands (its new 3×3, see Physics.jsx makeBody).
+ * `onResize(id, transform)`: an object was resized with both hands (its new 3×3, see Physics.jsx makeBody);
+ * `placing`: a ref to what a shape tool or Paste would make (Scene.jsx
+ * placingSpec, or null), `onPlace(spec, position, quaternion)` makes it,
+ * `surfaces()` the meshes it can rest on, `previews` { left, right } refs to
+ * the controllers' wireframes of it.
  * Returns a ref to which hands' grips hold something now ({ left, right }),
  * whose sticks are then theirs, not the player's.
  */
-export function useControllerGrips({ panels, origin, registry, holds, probes, textSize, home, homeScale, onScale, onResize }) {
+export function useControllerGrips({ panels, origin, registry, holds, probes, textSize, home, homeScale, onScale, onResize, placing, onPlace, surfaces, previews }) {
   const gl = useThree((s) => s.gl);
   // hand -> { target: 'body', id, offset, point, byRay, at } | { target: 'panel', key, offset, point, size, grow, zone } | { target: 'scale' } | { target: 'resize', id } | { target: 'none' }
   const grabs = useRef({});
@@ -165,6 +175,7 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
   // both hands on one object: { id, owner (the hand Holds has it by), lock (a trigger held), base, now }, each pose
   // { position, quaternion (the body's), transform (Matrix3: its resizing), tips: { left, right } (probes, world), grips: { left, right } (quaternions) }
   const resizing = useRef(null);
+  const triggered = useRef({}); // hand -> its trigger was held last frame
   const docks = useRef(Object.fromEntries(Object.entries(FIRST_DOCK).map(([key, hand]) => [key, { dock: hand }]))); // key -> { dock: hand | null, on, fly }
   const taps = useRef({}); // hand -> { pressedAt, tappedAt, count }
   const pressed = useRef({});
@@ -576,6 +587,41 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       const zone = dockZone(hand, g.key);
       if (zone && zone !== g.zone) buzz(zone, PULSE.zone);
       g.zone = zone;
+    }
+
+    // a shape tool or Paste: each controller's wireframe of what it would make, and its trigger making it
+    const spec = placing?.current;
+    for (const hand of HANDS) {
+      const c = controllers[hand];
+      const was = triggered.current[hand];
+      triggered.current[hand] = Boolean(c?.trigger);
+      const preview = previews?.[hand]?.current;
+      if (!preview) continue;
+      preview.visible = false;
+      if (!spec || !c || holding.current[hand] || resizing.current) continue;
+      raycaster.ray.copy(c.ray);
+      raycaster.far = Infinity;
+      const hit = raycaster.intersectObjects(surfaces(), false)[0];
+      const panel = panelAt(c);
+      if (panel && (!hit || panel.distance <= hit.distance)) continue; // (the panel's, then)
+      let position;
+      const quaternion = new THREE.Quaternion();
+      if (hit) {
+        // on what it points at, turned the way it points
+        const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : _up.clone();
+        position = restingPosition(spec.shape, spec.transform, hit.point, normal);
+        quaternion.setFromAxisAngle(_up, Math.atan2(-c.ray.direction.x, -c.ray.direction.z));
+      } else {
+        // round the probe, turned as the hand is
+        position = controllerTip(c.rayMatrix, new THREE.Vector3());
+        c.grip.decompose(_pos, quaternion, _scale);
+      }
+      preview.matrix.compose(position, quaternion, _one).multiply(transformMatrix(spec.transform));
+      preview.visible = true;
+      if (c.trigger && !was) {
+        onPlace(spec, position, quaternion);
+        buzz(hand, PULSE.grab);
+      }
     }
 
     // the probes: at each controller's tip; a tap as one comes onto an object, a hum while it's in one

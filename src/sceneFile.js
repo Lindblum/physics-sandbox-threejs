@@ -23,6 +23,7 @@ import { DISC, lookMaterial, makeBody } from './Physics.jsx';
 import { DISC_MATERIAL, MATERIALS, materialById } from './materials.js';
 import { SHAPES, shapeOf } from './shapes.js';
 import { fluidGrains } from './Fluids.jsx';
+import { sheetGeometry } from './Cloth.jsx';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const FORMAT = 'physics-sandbox'; // the scene's extras: { format, version, gravity }
@@ -108,12 +109,22 @@ export async function saveScene({ bodies, registry, gravity }) {
 function grainsMesh(def, pour, looks) {
   const { material, radius } = pour;
   const at = pour.positions();
-  const ball = new THREE.IcosahedronGeometry(radius * (material.simulation === 'liquid' ? 1.35 : 1), 1);
-  const parts = [];
-  for (let i = 0; i < at.length; i += 3) parts.push(ball.clone().translate(at[i], at[i + 1], at[i + 2]));
   if (!looks.has(material.id)) looks.set(material.id, lookMaterial(material, { transmission: true, detail: true }));
-  const mesh = new THREE.Mesh(mergeGeometries(parts), looks.get(material.id));
-  mesh.name = `${material.name} ${material.simulation === 'liquid' ? 'droplets' : 'grains'}`;
+  let geometry;
+  if (material.simulation === 'cloth') {
+    // a sheet: its surface through its points
+    geometry = sheetGeometry(Math.round(Math.sqrt(at.length / 3)), radius * 2);
+    geometry.getAttribute('position').array.set(at);
+    geometry.computeVertexNormals();
+  } else {
+    const ball = new THREE.IcosahedronGeometry(radius * (material.simulation === 'liquid' ? 1.35 : 1), 1);
+    const parts = [];
+    for (let i = 0; i < at.length; i += 3) parts.push(ball.clone().translate(at[i], at[i + 1], at[i + 2]));
+    geometry = mergeGeometries(parts);
+  }
+  const look = material.simulation === 'cloth' ? Object.assign(looks.get(material.id).clone(), { side: THREE.DoubleSide }) : looks.get(material.id);
+  const mesh = new THREE.Mesh(geometry, look);
+  mesh.name = `${material.name} ${{ liquid: 'droplets', granular: 'grains', cloth: 'sheet' }[material.simulation]}`;
   const n = at.length / 3;
   mesh.userData = {
     sandbox_fluid: true,

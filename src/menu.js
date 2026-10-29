@@ -17,9 +17,16 @@ export const TOOLS_TOGGLE = 'tools:toggle';
 /** Options' corner, the scene scale: pressed, back to real size. */
 export const SCALE_RESET = 'scale:reset';
 
-/** The tools, in the Tools dropdown: Select picks objects up; each shape (see shapes.js) makes one where you click. */
+/**
+ * The tools, in the Tools dropdown: Select picks objects up; Copy takes an
+ * object (its shape, material and size), Paste makes another like it, Delete
+ * takes one away; each shape (see shapes.js) makes one where you click.
+ */
 export const TOOLS = [
   { value: 'select', label: 'Select', icon: 'select' },
+  { value: 'copy', label: 'Copy', icon: 'copy' },
+  { value: 'paste', label: 'Paste', icon: 'paste' },
+  { value: 'delete', label: 'Delete', icon: 'delete' },
   ...Object.values(SHAPES).map((s) => ({ value: s.id, label: s.label, icon: s.id === 'cube' ? 'shape' : s.id === 'sphere' ? 'sphere' : `shape:${s.id}` })),
 ];
 
@@ -70,14 +77,16 @@ export function viewPanel(inXR) {
 /**
  * The Tools panel, like grid-game-threejs's Control menu (windowed in the
  * top-right corner; in XR on the right controller): two dropdowns, the tool in
- * use and the material the Cube and Sphere tools make things of.
- * `state`: { toolsOpen, tool, material, dropdowns }.
+ * use and the material the shape tools make things of.
+ * `state`: { toolsOpen, tool, material, clip (what Copy took, if anything), dropdowns }.
  */
 export function toolsPanel(state) {
   const tool = TOOLS.find((t) => t.value === state.tool) ?? TOOLS[0];
   const material = MATERIAL_CHOICES.find((m) => m.value === state.material) ?? MATERIAL_CHOICES[0];
+  // (Paste: nothing to paste until something's copied)
+  const tools = TOOLS.map((t) => (t.value === 'paste' && !state.clip ? { ...t, disabled: true, title: 'Copy an object first' } : t));
   const items = [
-    { id: 'tool', label: `Tool: ${tool.label}`, icon: tool.icon, dropdown: dropdown(state, 'tool', TOOLS, state.tool) },
+    { id: 'tool', label: `Tool: ${tool.label}`, icon: tool.icon, dropdown: dropdown(state, 'tool', tools, state.tool) },
     {
       id: 'material',
       label: `Material: ${material.label}`,
@@ -218,7 +227,7 @@ export function menuItems(state, env) {
   return [
     group('file', 'File', 'file', ['new', 'save', 'open']),
     group('physics', 'Physics', 'gravity', ['gravity', 'simulation', 'reset']),
-    group('video', 'Video', 'video', ['background', 'view', 'reflections', 'refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'particles', 'vsync', 'xrResolution']),
+    group('video', 'Video', 'video', ['background', 'view', 'grid', 'reflections', 'refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'particles', 'vsync', 'xrResolution']),
     group('accessibility', 'Accessibility', 'accessibility', ['volume', 'vibration', 'textSize', 'controllerGuide']),
   ];
 }
@@ -292,6 +301,12 @@ function settingsById(state, env) {
       label: `Reflections: ${state.reflections ? 'On' : 'Off'}`,
       icon: state.reflections ? 'reflectionsOn' : 'reflectionsOff',
       title: 'On: objects mirror their surroundings, metals most. Off: lit by the lights alone (faster)',
+    },
+    {
+      id: 'grid',
+      label: `Show Grid: ${state.grid ? 'On' : 'Off'}`,
+      icon: state.grid ? 'gridOn' : 'gridOff',
+      title: 'Thin grey lines every 10 cm through the space over the disc, up to 2 m: to judge sizes and distances',
     },
     // the effects that cost the most, each to be turned down where frames run short (in XR most of all)
     {
@@ -380,7 +395,7 @@ export function possibleLabels(env) {
   for (const flag of [false, true])
     for (const background of backgrounds)
       for (const view of env.views)
-        for (const item of Object.values(settingsById({ gravity: flag, paused: flag, reflections: flag, refraction: flag, shadows: flag, glowLights: flag, surfaceDetail: flag, liquidSurfaces: flag, particles: flag ? 'high' : 'low', volume: 1, vibration: 1, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
+        for (const item of Object.values(settingsById({ gravity: flag, paused: flag, grid: flag, reflections: flag, refraction: flag, shadows: flag, glowLights: flag, surfaceDetail: flag, liquidSurfaces: flag, particles: flag ? 'high' : 'low', volume: 1, vibration: 1, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
           labels.add(item.label);
   // the sliders' widest values, and Controller Guide both ways
   labels.add(`Text Size: ${percent(TEXT_SIZE.max)}`);

@@ -120,6 +120,7 @@ function loadEffects() {
     glowLights: flag('glowLights', true),
     surfaceDetail: flag('surfaceDetail', true),
     liquidSurfaces: flag('liquidSurfaces', true),
+    grid: flag('grid', false),
     particles: saved.particles === 'low' ? 'low' : 'high',
   };
 }
@@ -209,6 +210,7 @@ function useViewerState() {
       // (not remembered)
     }
   }, [effects]);
+  const [clip, setClip] = useState(null); // what the Copy tool took: { shape, material, transform?, fluid?, name }
   const [sceneScale, setSceneScale] = useState(1); // XR: both grips in mid-air scale it (see Grab.jsx)
   const [scaleReset, setScaleReset] = useState(0); // counts presses of the scale, each one back to real size
   useEffect(() => {
@@ -268,6 +270,7 @@ function useViewerState() {
           return { ...a, volume: a.volume > 0 ? 0 : unmutedVolume.current };
         }),
       toggleReflections: () => setReflections((v) => !v),
+      setClip,
       toggleEffect: (id) => setEffects((e) => ({ ...e, [id]: id === 'particles' ? (e.particles === 'low' ? 'high' : 'low') : !e[id] })),
       setSceneScale,
       resetScale: () => setScaleReset((n) => n + 1),
@@ -309,6 +312,7 @@ function useViewerState() {
     ...effects,
     sceneScale,
     scaleReset,
+    clip,
     background,
     passthrough: background === 'passthrough',
     screenView,
@@ -831,7 +835,7 @@ export default function App() {
     else if (id === 'controllerGuide') actions.toggleControllerGuide();
     else if (id === 'vsync') actions.toggleVSync();
     else if (id === 'reflections') actions.toggleReflections();
-    else if (['refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'particles'].includes(id)) actions.toggleEffect(id);
+    else if (['grid', 'refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'particles'].includes(id)) actions.toggleEffect(id);
     else if (id === SCALE_RESET) actions.resetScale();
   };
   const slideTo = (id, value) => {
@@ -880,6 +884,7 @@ export default function App() {
               setBodies={actions.setBodies}
               registry={registry}
               onScale={actions.setSceneScale}
+              setClip={actions.setClip}
               resetScale={state.scaleReset}
             />
           </Suspense>
