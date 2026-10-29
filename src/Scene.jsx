@@ -12,7 +12,7 @@ import { Probes, useControllerGrips } from './Grab.jsx';
 import { SOLID_BACKGROUND } from './menu.js';
 import { FramePacing } from './FramePacing.jsx';
 import { Physics, useRapier } from '@react-three/rapier';
-import { CUBE_SIZE, Disc, HeldLabels, Holds, SPHERE_RADIUS, SandboxBodies, makeBody, withMade } from './Physics.jsx';
+import { AirDrag, CUBE_SIZE, ContactSounds, Disc, HeldLabels, Holds, SPHERE_RADIUS, SandboxBodies, makeBody, withMade } from './Physics.jsx';
 import { randomMaterial } from './materials.js';
 import { PhoneStereoCameraFeed, PhoneStereoXR } from './PhoneStereo.jsx';
 import { SideBySide } from './SideBySide.jsx';
@@ -238,9 +238,10 @@ const toolPointer = (e) => !e.internalPointer || e.pointerType === 'ray';
  * up; it follows the pointer at the distance it was taken from (the mouse
  * wheel moves it nearer or further), and let go it's thrown. Cube / Sphere: a
  * click on the disc or an object makes one there, resting on the face clicked,
- * of a random material. Returns [handlers(id) for an object's mesh, the disc's onClick].
+ * of the Material chosen (or a random one). Returns [handlers(id) for an
+ * object's mesh, the disc's onClick].
  */
-function useTools({ tool, registry, holds, setBodies }) {
+function useTools({ tool, material, registry, holds, setBodies }) {
   const controls = useThree((s) => s.controls);
   const drag = useRef(null); // { id, pointerId, ray, distance, offset }
 
@@ -272,7 +273,8 @@ function useTools({ tool, registry, holds, setBodies }) {
     // out from the face clicked, resting on it (a sliver apart, so they don't start overlapping)
     const normal = e.face ? e.face.normal.clone().transformDirection(e.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
     const at = e.point.clone().addScaledVector(normal, half + 0.005);
-    setBodies((list) => withMade(list, makeBody(tool, randomMaterial().id, at.toArray())));
+    const made = material === 'random' ? randomMaterial().id : material;
+    setBodies((list) => withMade(list, makeBody(tool, made, at.toArray())));
   };
 
   const cursor = (value) => (document.body.style.cursor = value);
@@ -318,10 +320,10 @@ function useTools({ tool, registry, holds, setBodies }) {
 /**
  * `panels`: the panels' template (Options, the View panel where a headset can
  * be used, and Tools; see menu.js), `onSelect(id)` for their buttons.
- * `bodies` / `setBodies`: the objects (see Physics.jsx).
+ * `bodies` / `setBodies`: the objects (see Physics.jsx); `registry`: their bodies, by id.
  * `menuOverlay`: the page shows Options over the scene (Phone AR), so no panel in it.
  */
-export default function Scene({ state, panels, onSelect, menuOverlay, phone, bodies, setBodies }) {
+export default function Scene({ state, panels, onSelect, menuOverlay, phone, bodies, setBodies, registry }) {
   const inSession = useXR((s) => s.mode === 'immersive-vr' || s.mode === 'immersive-ar');
   const inAR = useXR((s) => s.mode === 'immersive-ar');
   // a phone's AR session drawn as two lens-corrected eyes
@@ -335,9 +337,9 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   // the skybox is behind the objects: Skybox, or Passthrough before an AR session
   const showsSky = state.background === 'skybox' || (state.background === 'passthrough' && !inAR && !cameraPassthrough);
   useEffect(() => setCameraFailed(false), [cameraPassthrough]);
-  const registry = useMemo(() => new Map(), []);
+  const discCollider = useRef(null);
   const holds = useMemo(() => new Holds(registry), [registry]);
-  const [handlers, make] = useTools({ tool: state.tool, registry, holds, setBodies });
+  const [handlers, make] = useTools({ tool: state.tool, material: state.material, registry, holds, setBodies });
   const menuPanel = useRef(null);
   const viewPanel = useRef(null);
   const toolsPanel = useRef(null);
@@ -379,8 +381,10 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
       <Lights />
       <Physics gravity={state.gravity ? GRAVITY : NO_GRAVITY} paused={state.paused}>
         <WakeOnGravity gravity={state.gravity} />
-        <Disc onClick={make} />
+        <Disc onClick={make} colliderRef={discCollider} />
         <SandboxBodies bodies={bodies} setBodies={setBodies} registry={registry} holds={holds} handlers={handlers} />
+        <AirDrag registry={registry} />
+        <ContactSounds registry={registry} disc={discCollider} />
       </Physics>
       <HeldLabels registry={registry} holds={holds} />
       <Player

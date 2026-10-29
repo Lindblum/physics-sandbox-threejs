@@ -8,9 +8,12 @@ import { phoneARSessionInit } from './PhoneStereo.jsx';
 import { XR_RESOLUTION, setXRViewportScale } from './xrResolution.js';
 import { CardboardOverlay, canUseCardboard, enterCardboard, exitCardboard } from './Cardboard.jsx';
 import { startingBodies } from './Physics.jsx';
+import { openScene, saveScene } from './sceneFile.js';
+import { initSound, setSoundOn } from './sound.js';
 import {
   MENU_TOGGLE,
   PICK_PREFIX,
+  MATERIAL_CHOICES,
   TOOLS,
   TOOLS_TOGGLE,
   VIEW_TOGGLE,
@@ -91,6 +94,15 @@ const toggleIn = (id) => (list) => (list.includes(id) ? list.filter((x) => x !==
 
 // Accessibility settings and XR Resolution are remembered in this browser
 const TOOLS_KEY = 'physics-sandbox.tools';
+const SOUND_KEY = 'physics-sandbox.sound';
+
+function loadSound() {
+  try {
+    return JSON.parse(localStorage.getItem(SOUND_KEY)) !== false;
+  } catch {
+    return true;
+  }
+}
 const ACCESSIBILITY_KEY = 'physics-sandbox.accessibility';
 const XR_RESOLUTION_KEY = 'physics-sandbox.xrResolution';
 const VSYNC_KEY = 'physics-sandbox.vsync';
@@ -111,7 +123,7 @@ function loadXRResolution() {
   }
 }
 
-/** The Tools panel: { tool, open }, as last left. */
+/** The Tools panel: { tool, material, open }, as last left. */
 function loadTools() {
   let saved = {};
   try {
@@ -119,7 +131,11 @@ function loadTools() {
   } catch {
     // (the defaults)
   }
-  return { tool: TOOLS.some((t) => t.value === saved.tool) ? saved.tool : 'select', open: saved.open !== false };
+  return {
+    tool: TOOLS.some((t) => t.value === saved.tool) ? saved.tool : 'select',
+    material: MATERIAL_CHOICES.some((m) => m.value === saved.material) ? saved.material : 'random',
+    open: saved.open !== false,
+  };
 }
 
 function loadAccessibility() {
@@ -145,7 +161,16 @@ function useViewerState() {
   const [paused, setPaused] = useState(false); // the simulation
   const [keepXRPose, setKeepXRPose] = useState(false); // the XR session is starting again (XR Resolution)
   const [menuOpen, setMenuOpen] = useState(true); // shared by the windowed and XR panels
-  const [tools, setTools] = useState(loadTools); // the Tools panel: { tool, open }, likewise
+  const [tools, setTools] = useState(loadTools); // the Tools panel: { tool, material, open }, likewise
+  const [sound, setSound] = useState(loadSound); // Options → Physics → Sound
+  useEffect(() => {
+    setSoundOn(sound);
+    try {
+      localStorage.setItem(SOUND_KEY, JSON.stringify(sound));
+    } catch {
+      // (not remembered)
+    }
+  }, [sound]);
   useEffect(() => {
     try {
       localStorage.setItem(TOOLS_KEY, JSON.stringify(tools));
@@ -191,6 +216,9 @@ function useViewerState() {
     () => ({
       setBodies,
       toggleGravity: () => setGravity((v) => !v),
+      setGravity,
+      toggleSound: () => setSound((v) => !v),
+      setMaterial: (material) => setTools((t) => ({ ...t, material })),
       resetBodies: () => setBodies(startingBodies()),
       setTool: (tool) => setTools((t) => ({ ...t, tool })),
       toggleTools: () => setTools((t) => ({ ...t, open: !t.open })),
@@ -222,7 +250,9 @@ function useViewerState() {
     bodies,
     gravity,
     tool: tools.tool,
+    material: tools.material,
     toolsOpen: tools.open,
+    sound,
     background,
     passthrough: background === 'passthrough',
     screenView,
@@ -250,6 +280,7 @@ function useKeyboard(actions) {
       KeyG: actions.toggleGravity,
       KeyP: actions.togglePause,
       KeyR: actions.resetBodies,
+      KeyM: actions.toggleSound,
       Enter: actions.toggleMenu,
       NumpadEnter: actions.toggleMenu,
       Escape: actions.toggleMenu,
@@ -569,6 +600,9 @@ function Panel({ panel, onSelect, error, size, onResize, stretch }) {
 export default function App() {
   const [viewerState, actions] = useViewerState();
   useKeyboard(actions);
+  useEffect(initSound, []);
+  // the objects' Rapier bodies, by id (see Physics.jsx): where they are now, for saving
+  const registry = useMemo(() => new Map(), []);
 
   const support = useXRSupport();
   const phone = useMemo(isPhone, []);
@@ -715,6 +749,25 @@ export default function App() {
     else if (id === 'gravity') actions.toggleGravity();
     else if (id === 'simulation') actions.togglePause();
     else if (id === 'reset') actions.resetBodies();
+    else if (id === 'sound') actions.toggleSound();
+    else if (id === 'save')
+      saveScene({ bodies: state.bodies, registry, gravity: state.gravity }).catch((e) => {
+        console.error('[physics-sandbox] could not save the scene', e);
+        setError(`Couldn't save the scene: ${describe(e)}`);
+      });
+    else if (id === 'open')
+      openScene().then(
+        (scene) => {
+          if (!scene) return;
+          setError(null);
+          actions.setBodies(scene.bodies);
+          if (scene.gravity !== undefined) actions.setGravity(scene.gravity);
+        },
+        (e) => {
+          console.error('[physics-sandbox] could not open the scene', e);
+          setError(`Couldn't open the scene: ${describe(e)}`);
+        },
+      );
     else if (id === 'controllerGuide') actions.toggleControllerGuide();
     else if (id === 'vsync') actions.toggleVSync();
   };
@@ -724,6 +777,7 @@ export default function App() {
   };
   const choose = (id, value) => {
     if (id === 'tool') actions.setTool(value);
+    else if (id === 'material') actions.setMaterial(value);
     else if (id === 'background') actions.setBackground(value);
     else if (id === 'view') selectView(value);
   };
@@ -759,6 +813,7 @@ export default function App() {
               phone={phone}
               bodies={state.bodies}
               setBodies={actions.setBodies}
+              registry={registry}
             />
           </Suspense>
         </XR>

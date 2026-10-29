@@ -1,10 +1,11 @@
 // Options menu model shared by the windowed panel (DOM) and the XR panel
-// (drawn on a canvas): three groups, Physics, Video and Accessibility, each
+// (drawn on a canvas): four groups, File, Physics, Video and Accessibility, each
 // opening a list of setting buttons beneath it, each "Name: Value". A
 // dropdown opens a list of choices beneath it (a chevron on its right); a
 // slider sets a value along its track; the rest toggle when pressed.
 
 import { XR_RESOLUTION } from './xrResolution.js';
+import { MATERIALS } from './materials.js';
 
 export const MENU_TITLE = 'Physics Sandbox';
 
@@ -19,6 +20,9 @@ export const TOOLS = [
   { value: 'cube', label: 'Cube', icon: 'shape' },
   { value: 'sphere', label: 'Sphere', icon: 'sphere' },
 ];
+
+/** The Material dropdown's choices: Random (a solid or liquid one each time), then the table's, in its order. */
+export const MATERIAL_CHOICES = [{ value: 'random', label: 'Random' }, ...MATERIALS.map((m) => ({ value: m.id, label: m.name }))];
 
 /**
  * The panels, one template for both renderers (the windowed one in App.jsx,
@@ -51,19 +55,30 @@ export function viewPanel(inXR) {
 
 /**
  * The Tools panel, like grid-game-threejs's Control menu (windowed in the
- * top-right corner; in XR on the right controller): one dropdown, the tool in use.
- * `state`: { toolsOpen, tool, dropdowns }.
+ * top-right corner; in XR on the right controller): two dropdowns, the tool in
+ * use and the material the Cube and Sphere tools make things of.
+ * `state`: { toolsOpen, tool, material, dropdowns }.
  */
 export function toolsPanel(state) {
   const tool = TOOLS.find((t) => t.value === state.tool) ?? TOOLS[0];
-  const items = [{ id: 'tool', label: `Tool: ${tool.label}`, icon: tool.icon, dropdown: dropdown(state, 'tool', TOOLS, state.tool) }];
+  const material = MATERIAL_CHOICES.find((m) => m.value === state.material) ?? MATERIAL_CHOICES[0];
+  const items = [
+    { id: 'tool', label: `Tool: ${tool.label}`, icon: tool.icon, dropdown: dropdown(state, 'tool', TOOLS, state.tool) },
+    {
+      id: 'material',
+      label: `Material: ${material.label}`,
+      icon: 'material',
+      dropdown: dropdown(state, 'material', MATERIAL_CHOICES, material.value),
+      title: 'What Cube and Sphere make things of',
+    },
+  ];
   return {
     id: 'tools',
     toggle: { id: TOOLS_TOGGLE, icon: 'eye', label: state.toolsOpen ? 'Hide tools' : 'Show tools' },
     title: 'Tools',
     open: state.toolsOpen,
     items,
-    labels: TOOLS.map((t) => `Tool: ${t.label}`),
+    labels: [...TOOLS.map((t) => `Tool: ${t.label}`), ...MATERIAL_CHOICES.map((m) => `Material: ${m.label}`)],
   };
 }
 
@@ -165,7 +180,7 @@ export function pickedChoice(items, pickId) {
 }
 
 /**
- * Items: the groups Physics, Video and Accessibility, { id, label, icon, group: { open, items } },
+ * Items: the groups File, Physics, Video and Accessibility, { id, label, icon, group: { open, items } },
  * which, when open (in `state.groups`), list their settings beneath, indented like
  * a dropdown's choices. Settings: { id, label ("Name: Value", see splitLabel),
  * icon, disabled?, title?, dropdown?, slider? }. `slider`: { min, max, step, value }. `dropdown`: { open, options: [{ id,
@@ -182,7 +197,8 @@ export function menuItems(state, env) {
     group: { open: state.groups.includes(id), items: ids.map((setting) => settings[setting]) },
   });
   return [
-    group('physics', 'Physics', 'gravity', ['gravity', 'simulation', 'reset']),
+    group('file', 'File', 'file', ['save', 'open']),
+    group('physics', 'Physics', 'gravity', ['gravity', 'simulation', 'sound', 'reset']),
     group('video', 'Video', 'video', ['background', 'view', 'vsync', 'xrResolution']),
     group('accessibility', 'Accessibility', 'accessibility', ['textSize', 'controllerGuide']),
   ];
@@ -234,6 +250,14 @@ function settingsById(state, env) {
     },
     { id: 'gravity', label: `Gravity: ${state.gravity ? 'On' : 'Off'}`, icon: state.gravity ? 'gravity' : 'gravityOff', title: 'Off: objects float where they are let go' },
     { id: 'simulation', label: `Simulation: ${state.paused ? 'Paused' : 'Running'}`, icon: state.paused ? 'pause' : 'play' },
+    { id: 'save', label: 'Save Scene (.glb)', icon: 'save', title: 'Download the scene as glTF, which Blender imports (File → Import → glTF 2.0)' },
+    { id: 'open', label: 'Open Scene (.glb)', icon: 'open', title: 'Load a scene saved here, or one from Blender that kept its custom properties' },
+    {
+      id: 'sound',
+      label: `Sound: ${state.sound ? 'On' : 'Off'}`,
+      icon: state.sound ? 'soundOn' : 'soundOff',
+      title: 'Objects striking and sliding on each other, sounding like what they are made of',
+    },
     { id: 'reset', label: 'Reset Objects', icon: 'rotate', title: 'The ten starting cubes dropped onto the disc again; the objects made are cleared' },
     {
       id: 'vsync',
@@ -285,7 +309,7 @@ export function possibleLabels(env) {
   for (const flag of [false, true])
     for (const background of backgrounds)
       for (const view of env.views)
-        for (const item of Object.values(settingsById({ gravity: flag, paused: flag, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
+        for (const item of Object.values(settingsById({ gravity: flag, paused: flag, sound: flag, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
           labels.add(item.label);
   // the sliders' widest values, and Controller Guide both ways
   labels.add(`Text Size: ${percent(TEXT_SIZE.max)}`);

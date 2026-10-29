@@ -14,6 +14,12 @@ import gamepad from 'lineicons/assets/svgs/regular/game-pad-modern-1.svg?raw';
 import play from 'lineicons/assets/svgs/regular/play.svg?raw';
 import selectCursor from 'lineicons/assets/svgs/regular/select-cursor-1.svg?raw';
 import arrowDown from 'lineicons/assets/svgs/regular/arrow-downward.svg?raw';
+import floppy from 'lineicons/assets/svgs/regular/floppy-disk-1.svg?raw';
+import folder from 'lineicons/assets/svgs/regular/folder-1.svg?raw';
+import fileMultiple from 'lineicons/assets/svgs/regular/file-multiple.svg?raw';
+import volume from 'lineicons/assets/svgs/regular/volume-high.svg?raw';
+import volumeMute from 'lineicons/assets/svgs/regular/volume-mute.svg?raw';
+import palette from 'lineicons/assets/svgs/regular/colour-palette-3.svg?raw';
 
 // Lineicons ship with a fixed fill; recolour to follow the surrounding text
 // and size to the font.
@@ -180,6 +186,12 @@ const ICONS = {
   eye: recolour(eye),
   gravity,
   gravityOff,
+  file: recolour(fileMultiple),
+  save: recolour(floppy),
+  open: recolour(folder),
+  soundOn: recolour(volume),
+  soundOff: recolour(volumeMute),
+  material: recolour(palette),
   edges,
   monitor,
   video,
