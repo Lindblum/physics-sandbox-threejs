@@ -10,6 +10,7 @@ import { CardboardOverlay, canUseCardboard, enterCardboard, exitCardboard } from
 import { startingBodies } from './Physics.jsx';
 import { openScene, saveScene } from './sceneFile.js';
 import { initSound, setVolume, wakeSoundInXR } from './sound.js';
+import { Stopped, rememberError, takeLastError } from './Recovery.jsx';
 import { setVibration } from './grip.js';
 import {
   MENU_TOGGLE,
@@ -35,6 +36,10 @@ import {
   snapToSlider,
   VIBRATION,
   VOLUME,
+  CLOTH_DETAIL,
+  GRAIN_DETAIL,
+  LIQUID_DETAIL,
+  PHYSICS_RATE,
   toolsPanel,
   viewPanel,
 } from './menu.js';
@@ -65,6 +70,8 @@ const xrOptions = {
   frameBufferScaling: undefined, // Options → Video → XR Resolution, set as each session starts (see enterXR)
 };
 const store = createXRStore(xrOptions);
+// (development only: the store, for driving XR sessions from tests and the console)
+if (import.meta.env.DEV) window.__xrStore = store;
 
 /**
  * The phone AR session: the library's defaults plus raw camera access, for
@@ -100,6 +107,23 @@ const toggleIn = (id) => (list) => (list.includes(id) ? list.filter((x) => x !==
 const TOOLS_KEY = 'physics-sandbox.tools';
 const REFLECTIONS_KEY = 'physics-sandbox.reflections';
 const EFFECTS_KEY = 'physics-sandbox.effects';
+const DETAIL_KEY = 'physics-sandbox.detail';
+
+/** The simulation's resolutions (Physics) and the liquids' surface's (Video), as last left. */
+function loadDetail() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(DETAIL_KEY)) ?? {};
+  } catch {
+    // (the defaults)
+  }
+  return {
+    physicsRate: snapToSlider(PHYSICS_RATE, saved.physicsRate),
+    grainDetail: snapToSlider(GRAIN_DETAIL, saved.grainDetail),
+    clothDetail: snapToSlider(CLOTH_DETAIL, saved.clothDetail),
+    liquidDetail: snapToSlider(LIQUID_DETAIL, saved.liquidDetail),
+  };
+}
 
 /**
  * Video's costly effects, as last left: { refraction, shadows, glowLights,
@@ -210,6 +234,14 @@ function useViewerState() {
       // (not remembered)
     }
   }, [effects]);
+  const [detail, setDetail] = useState(loadDetail); // Physics' and Video's resolutions (see loadDetail)
+  useEffect(() => {
+    try {
+      localStorage.setItem(DETAIL_KEY, JSON.stringify(detail));
+    } catch {
+      // (not remembered)
+    }
+  }, [detail]);
   const [clip, setClip] = useState(null); // what the Copy tool took: { shape, material, transform?, fluid?, name }
   const [sceneScale, setSceneScale] = useState(1); // XR: both grips in mid-air scale it (see Grab.jsx)
   const [scaleReset, setScaleReset] = useState(0); // counts presses of the scale, each one back to real size
@@ -271,6 +303,7 @@ function useViewerState() {
         }),
       toggleReflections: () => setReflections((v) => !v),
       setClip,
+      setDetail: (id, value) => setDetail((d) => ({ ...d, [id]: snapToSlider({ physicsRate: PHYSICS_RATE, grainDetail: GRAIN_DETAIL, clothDetail: CLOTH_DETAIL, liquidDetail: LIQUID_DETAIL }[id], value) })),
       toggleEffect: (id) => setEffects((e) => ({ ...e, [id]: id === 'particles' ? (e.particles === 'low' ? 'high' : 'low') : !e[id] })),
       setSceneScale,
       resetScale: () => setScaleReset((n) => n + 1),
@@ -310,6 +343,7 @@ function useViewerState() {
     toolsOpen: tools.open,
     reflections,
     ...effects,
+    ...detail,
     sceneScale,
     scaleReset,
     clip,
@@ -685,7 +719,9 @@ export default function App() {
   // a panel in it: the motion-sensor view is the page itself, an AR session
   // needs its DOM overlay
   const menuOverlay = phone && inXR && !viewerState.stereo && (viewerState.handheld || domOverlay);
-  const [error, setError] = useState(null);
+  // (what stopped the app last time, if anything: shown once, see Recovery.jsx)
+  const [error, setError] = useState(takeLastError);
+  const [contextLost, setContextLost] = useState(false); // the graphics card dropped the scene (see Recovery.jsx)
 
   // into an XR view, straight from the tap, at XR Resolution; whether it started
   const enterXR = async (stereo) => {
@@ -847,6 +883,7 @@ export default function App() {
     if (id === 'textSize') actions.setTextSize(value);
     else if (id === 'volume') actions.setVolume(value);
     else if (id === 'vibration') actions.setVibration(value);
+    else if (['physicsRate', 'grainDetail', 'clothDetail', 'liquidDetail'].includes(id)) actions.setDetail(id, value);
     else if (id === 'xrResolution') actions.setXRResolution(value);
   };
   const choose = (id, value) => {
@@ -876,7 +913,20 @@ export default function App() {
 
   return (
     <>
-      <Canvas flat shadows dpr={[1, 2]} camera={{ position: [0, 1.1, 1.9], fov: 60, near: 0.02, far: 1000 }}>
+      {contextLost && <Stopped message="The graphics stopped (the browser dropped the 3D view's context)." />}
+      <Canvas
+        flat
+        shadows
+        dpr={[1, 2]}
+        camera={{ position: [0, 1.1, 1.9], fov: 60, near: 0.02, far: 1000 }}
+        onCreated={({ gl }) =>
+          gl.domElement.addEventListener('webglcontextlost', () => {
+            console.error('[physics-sandbox] WebGL context lost');
+            rememberError('the graphics context was lost');
+            setContextLost(true);
+          })
+        }
+      >
         <XR store={store}>
           <Suspense fallback={null}>
             <Scene

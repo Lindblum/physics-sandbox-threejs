@@ -18,8 +18,8 @@ import { transformMatrix } from './Physics.jsx';
 // its grip is held, nor on something held); a held object striking or sliding
 // on another buzzes the hand holding it (see ContactSounds).
 //
-// The other grip pressed with its probe on the object already held: both
-// hands hold it, to turn and resize it. It follows the hands' midpoint, turns
+// The other grip pressed with its probe on the object already held (or its
+// ray pointing at it): both hands hold it, to turn and resize it. It follows the hands' midpoint, turns
 // with the line between the probes (and with the hands' twist about it), and
 // grows or shrinks with the distance between them; with a trigger held, only
 // along that line (the line when the trigger was pressed), stretching it.
@@ -467,6 +467,11 @@ export function useControllerGrips({
         takeBody(hand, c, touched);
         return;
       }
+      // pointing at what the other hand holds: both turn and resize it
+      if (other0?.target === 'body' && holds.isHeld(other0.id, otherHand(hand)) && controllers[otherHand(hand)] && bodyPointed(c) === other0.id) {
+        startResize(other0.id);
+        return;
+      }
       // the other grip already held in mid-air (or just took something it pointed at): both scale the scene
       const other = grabs.current[otherHand(hand)];
       if (o && pressed.current[otherHand(hand)] && controllers[otherHand(hand)] && (other?.target === 'none' || (other?.target === 'body' && other.byRay && now - other.at < SCALE_JOIN_S))) {
@@ -632,6 +637,8 @@ export function useControllerGrips({
 
     // a shape tool or Paste: each controller's wireframe of what it would make, and its trigger making it
     const spec = placing?.current;
+    // (none while anything's held, resized or scaled)
+    const busy = HANDS.some((h) => grabs.current[h] && grabs.current[h].target !== 'none') || Boolean(resizing.current || scaling.current);
     for (const hand of HANDS) {
       const c = controllers[hand];
       const was = triggered.current[hand];
@@ -639,7 +646,7 @@ export function useControllerGrips({
       const preview = previews?.[hand]?.current;
       if (!preview) continue;
       preview.visible = false;
-      if (!spec || !c || holding.current[hand] || resizing.current) continue;
+      if (!spec || !c || busy) continue;
       raycaster.ray.copy(c.ray);
       raycaster.far = Infinity;
       const hit = raycaster.intersectObjects(surfaces(), false)[0];

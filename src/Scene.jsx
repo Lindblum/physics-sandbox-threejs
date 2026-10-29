@@ -201,6 +201,8 @@ function RestoreViewAfterXR() {
     camera.updateMatrixWorld(true);
     gl.setSize(size.width, size.height, false);
     invalidate();
+    // (and once the browser has settled back into the page: measured again)
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
   }, [session, camera, gl, size, invalidate]);
   return null;
 }
@@ -564,7 +566,8 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   const [cameraFailed, setCameraFailed] = useState(false);
   useEffect(() => setCameraFailed(false), [cameraPassthrough]);
   // Video's costly effects: the looks made again for Refraction and Surface Detail (before the objects render), and how many particles
-  setLookQuality({ refraction: state.refraction, surfaceDetail: state.surfaceDetail });
+  // (no refraction in XR: its pass draws into an empty target there, every frame)
+  setLookQuality({ refraction: state.refraction && !inSession, surfaceDetail: state.surfaceDetail });
   particles.density = state.particles === 'low' ? 0.35 : 1;
   const discCollider = useRef(null);
   const origin = useRef(null);
@@ -637,7 +640,7 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
       )}
       <Environment reflections={state.reflections} />
       <Lights shadows={state.shadows} />
-      <Physics gravity={state.gravity ? GRAVITY : NO_GRAVITY} paused={state.paused}>
+      <Physics gravity={state.gravity ? GRAVITY : NO_GRAVITY} paused={state.paused} timeStep={1 / state.physicsRate}>
         <WakeOnGravity gravity={state.gravity} />
         <Disc colliderRef={discCollider} meshRef={discMesh} handlers={discHandlers} />
         <SandboxBodies bodies={bodies} setBodies={setBodies} registry={registry} holds={holds} handlers={handlers} />
@@ -648,6 +651,9 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
           setBodies={setBodies}
           onClick={click}
           smooth={state.liquidSurfaces}
+          resolution={state.liquidDetail}
+          grainDetail={state.grainDetail}
+          clothDetail={state.clothDetail}
           // (cloth: picked up by Select's left button, or the middle one)
           grabs={(e) => !e.internalPointer && ((state.tool === 'select' && (e.button ?? 0) === 0) || e.button === 1)}
         />

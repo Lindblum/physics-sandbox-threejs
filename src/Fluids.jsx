@@ -36,7 +36,6 @@ const DRAWN = { liquid: 1.7, granular: 1.15 }; // drawn this much bigger than th
 const WET_FRICTION = 0.25; // liquids' droplets cling to what they're on (wetting it) at least this much, so a puddle stops spreading
 const REACH = 2.4; // liquids: a grain feels neighbours within this many radii
 // a liquid's surface: a marching-cubes grid this fine across the box round its droplets
-const SURFACE_RESOLUTION = 56;
 const SURFACE_MAX_HALF = 0.25; // m: the grid at most this far each way from its centre (so a droplet spans a cell or more); strays beyond are drawn as drops
 const SURFACE_MAX_POLYS = 40000;
 const SURFACE_MARGIN = 3; // droplet radii of room round them
@@ -77,8 +76,8 @@ const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const _s = new THREE.Vector3();
 
-/** Where a pour's grains start, and how big they are: from a saved scene, or filling its shape. */
-function grainPoints(def, material) {
+/** Where a pour's grains start, and how big they are: from a saved scene, or filling its shape (`detail`: Physics → Grain Detail, a multiplier on how many). */
+function grainPoints(def, material, detail = 1) {
   if (def.grains) {
     const points = [];
     for (let i = 0; i + 2 < def.grains.length; i += 3) points.push(new THREE.Vector3(def.grains[i], def.grains[i + 1], def.grains[i + 2]));
@@ -88,7 +87,7 @@ function grainPoints(def, material) {
   const t = def.transform ? new THREE.Matrix3().fromArray(def.transform) : new THREE.Matrix3();
   const det = Math.abs(t.determinant());
   const volume = shape.volume * det;
-  const count = THREE.MathUtils.clamp((material.grainCount * volume) / 0.001, MIN_PER_POUR, MAX_PER_POUR);
+  const count = THREE.MathUtils.clamp((material.grainCount * detail * volume) / 0.001, MIN_PER_POUR, MAX_PER_POUR * Math.max(1, detail));
   const spacing = Math.cbrt(volume / count); // (in the world)
   const step = spacing / Math.cbrt(det); // (in the shape's own space)
   const turn = new THREE.Quaternion().setFromEuler(new THREE.Euler(...def.rotation));
@@ -111,21 +110,21 @@ function grainPoints(def, material) {
  * One pour: its grains made in the world (and taken out after), drawn as one
  * instanced mesh (and a liquid's, with `smooth`, as one surface round them).
  */
-function Pour({ def, pours, setBodies, onClick, smooth }) {
+function Pour({ def, pours, setBodies, onClick, smooth, detail, resolution }) {
   const { world, rapier } = useRapier();
   const mesh = useRef(null);
   const material = materialById(def.material);
   const liquid = material.simulation === 'liquid';
-  const grains = useMemo(() => grainPoints(def, material), [def.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const grains = useMemo(() => grainPoints(def, material, detail), [def.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const drawn = grains.radius * (DRAWN[material.simulation] ?? 1);
   // a liquid's one surface round its droplets
   const surface = useMemo(() => {
     if (!liquid || !smooth) return null;
-    const mc = new MarchingCubes(SURFACE_RESOLUTION, surfaceLook(material), false, false, SURFACE_MAX_POLYS);
+    const mc = new MarchingCubes(resolution, surfaceLook(material), false, false, SURFACE_MAX_POLYS);
     mc.castShadow = mc.receiveShadow = true;
     mc.frustumCulled = false;
     return mc;
-  }, [liquid, smooth, material]);
+  }, [liquid, smooth, material, resolution]);
   useEffect(() => () => surface?.geometry.dispose(), [surface]);
   if (surface) surface.material = surfaceLook(material); // (made again when Video's looks change)
 
@@ -334,19 +333,21 @@ function liquidForces(pours, dt) {
 
 /**
  * Every pour among `bodies` (those with `fluid`), and their liquids' forces;
- * `smooth`: Video → Liquid Surfaces (metaballs).
+ * `smooth`: Video → Liquid Surfaces (metaballs), `resolution`: Liquid Surface
+ * Detail (the metaballs' grid); `grainDetail`, `clothDetail`: Physics → Grain
+ * Detail and Cloth Detail (for what's made from now on).
  * `setBodies` takes a pour away when it's gone, or the oldest when there are
  * more than MAX_GRAINS grains; `onClick(e, id)`: a click on the grains (the
  * tools: see Scene.jsx); cloth (see Cloth.jsx): `grabs(e)`, whether a press picks it up.
  */
-export function Fluids({ bodies, setBodies, onClick, smooth, grabs }) {
+export function Fluids({ bodies, setBodies, onClick, smooth, grabs, resolution, grainDetail, clothDetail }) {
   const pours = useMemo(() => new Map(), []);
   useBeforePhysicsStep((world) => liquidForces(pours, world.timestep));
   // too many grains: the oldest pour goes
   useFrame(() => {
     let total = 0;
     for (const p of pours.values()) total += p.bodies.length;
-    if (total <= MAX_GRAINS || pours.size < 2) return;
+    if (total <= MAX_GRAINS * Math.max(1, grainDetail) || pours.size < 2) return;
     const oldest = Math.min(...pours.keys());
     setBodies((list) => list.filter((b) => b.id !== oldest));
   });
@@ -354,7 +355,7 @@ export function Fluids({ bodies, setBodies, onClick, smooth, grabs }) {
     if (!def.fluid) return null;
     const material = materialById(def.material);
     if (material.simulation === 'cloth')
-      return <ClothSheet key={def.id} def={def} material={material} pours={pours} fluidGrains={fluidGrains} setBodies={setBodies} onClick={onClick} grabs={grabs} />;
-    return <Pour key={def.id} def={def} pours={pours} setBodies={setBodies} onClick={onClick} smooth={smooth} />;
+      return <ClothSheet key={def.id} def={def} material={material} pours={pours} fluidGrains={fluidGrains} setBodies={setBodies} onClick={onClick} grabs={grabs} detail={clothDetail} />;
+    return <Pour key={def.id} def={def} pours={pours} setBodies={setBodies} onClick={onClick} smooth={smooth} detail={grainDetail} resolution={resolution} />;
   });
 }

@@ -23,7 +23,6 @@ import { DISC, lookMaterial, makeBody } from './Physics.jsx';
 import { DISC_MATERIAL, MATERIALS, materialById } from './materials.js';
 import { SHAPES, shapeOf } from './shapes.js';
 import { fluidGrains } from './Fluids.jsx';
-import { sheetGeometry } from './Cloth.jsx';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const FORMAT = 'physics-sandbox'; // the scene's extras: { format, version, gravity }
@@ -111,11 +110,9 @@ function grainsMesh(def, pour, looks) {
   const at = pour.positions();
   if (!looks.has(material.id)) looks.set(material.id, lookMaterial(material, { transmission: true, detail: true }));
   let geometry;
-  if (material.simulation === 'cloth') {
-    // a sheet: its surface through its points
-    geometry = sheetGeometry(Math.round(Math.sqrt(at.length / 3)), radius * 2);
-    geometry.getAttribute('position').array.set(at);
-    geometry.computeVertexNormals();
+  if (pour.surface) {
+    // cloth: its surface as it lies
+    geometry = pour.surface();
   } else {
     const ball = new THREE.IcosahedronGeometry(radius * (material.simulation === 'liquid' ? 1.35 : 1), 1);
     const parts = [];
@@ -124,13 +121,15 @@ function grainsMesh(def, pour, looks) {
   }
   const look = material.simulation === 'cloth' ? Object.assign(looks.get(material.id).clone(), { side: THREE.DoubleSide }) : looks.get(material.id);
   const mesh = new THREE.Mesh(geometry, look);
-  mesh.name = `${material.name} ${{ liquid: 'droplets', granular: 'grains', cloth: 'sheet' }[material.simulation]}`;
+  mesh.name = `${material.name} ${{ liquid: 'droplets', granular: 'grains', cloth: shapeOf(def.shape).label }[material.simulation]}`;
   const n = at.length / 3;
   mesh.userData = {
     sandbox_fluid: true,
     sandbox_shape: def.shape,
     sandbox_material: material.id,
     sandbox_grain_radius: round(radius, 6),
+    ...(pour.detail && { sandbox_cloth_detail: pour.detail }),
+    ...(def.transform && { sandbox_transform: def.transform }),
     sandbox_grains: at.map((x) => round(x, 4)),
     state: material.state,
     mass_kg: round(material.density * (4 / 3) * Math.PI * radius ** 3 * n),
@@ -182,7 +181,14 @@ export async function readScene(file) {
       // a pour: its grains where they were (moved with its mesh, if moved in Blender)
       const grains = [];
       for (let i = 0; i + 2 < d.sandbox_grains.length; i += 3) grains.push(..._p.fromArray(d.sandbox_grains, i).applyMatrix4(o.matrixWorld).toArray());
-      if (grains.length) bodies.push(makeBody(SHAPES[d.sandbox_shape] ? d.sandbox_shape : 'cube', d.sandbox_material, grains.slice(0, 3), [0, 0, 0], false, { fluid: true, grains, grainRadius: Number(d.sandbox_grain_radius) || 0.006 }));
+      if (grains.length) bodies.push(makeBody(SHAPES[d.sandbox_shape] ? d.sandbox_shape : 'cube', d.sandbox_material, grains.slice(0, 3), [0, 0, 0], false, {
+            fluid: true,
+            grains,
+            grainRadius: Number(d.sandbox_grain_radius) || 0.006,
+            ...(Number(d.sandbox_cloth_detail) && { clothDetail: Number(d.sandbox_cloth_detail) }),
+            ...(Array.isArray(d.sandbox_transform) && d.sandbox_transform.length === 9 && { transform: d.sandbox_transform.map(Number) }),
+          }),
+        );
       return;
     }
     if (!SHAPES[d?.sandbox_shape] || !MATERIALS.some((m) => m.id === d.sandbox_material)) return;

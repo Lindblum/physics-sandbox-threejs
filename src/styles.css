@@ -50,6 +50,21 @@ canvas { display: block; touch-action: none; }
 
 .hud header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .hud h1 { flex: 1; margin: 0; font-size: calc(16px * var(--text-scale)); font-weight: 650; letter-spacing: 0.02em; }
+.stopped {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-content: center;
+  gap: 12px;
+  padding: 24px;
+  background: #242424;
+  color: #e8ecf2;
+  text-align: center;
+}
+.stopped h1 { margin: 0; font-size: 22px; }
+.stopped p { margin: 0; max-width: 40em; opacity: 0.8; }
+.stopped .menu-btn { justify-self: center; width: auto; padding: 8px 24px; }
 .hud .corner { flex: none; padding: 2px 8px; font-size: calc(12px * var(--text-scale)); font-variant-numeric: tabular-nums; opacity: 0.85; }
 .hud .collapse { display: grid; place-items: center; width: calc(30px * var(--text-scale)); height: calc(28px * var(--text-scale)); padding: 0; }
 .hud.collapsed header { margin-bottom: 0; }

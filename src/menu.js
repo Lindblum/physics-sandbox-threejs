@@ -152,6 +152,15 @@ export function splitLabel(label) {
 
 export const PICK_PREFIX = 'pick:';
 
+/** Physics → Physics Rate: simulation steps a second (more: steadier stacks and cloth, faster things caught, slower). */
+export const PHYSICS_RATE = Object.freeze({ min: 30, max: 240, step: 30, default: 60 });
+/** Physics → Grain Detail: how many grains a pour of liquid or sand has, a multiplier (for those made from now on). */
+export const GRAIN_DETAIL = Object.freeze({ min: 0.25, max: 2, step: 0.25, default: 1 });
+/** Physics → Cloth Detail: how fine a cloth's mesh is, a multiplier (for those made from now on). */
+export const CLOTH_DETAIL = Object.freeze({ min: 0.5, max: 2, step: 0.25, default: 1 });
+/** Video → Liquid Surface Detail: the metaballs' grid, cells a side. */
+export const LIQUID_DETAIL = Object.freeze({ min: 24, max: 80, step: 8, default: 56 });
+
 /** Accessibility → Volume: the sounds, 0 (off) to 100% (as grid-game-threejs's Sounds). */
 export const VOLUME = Object.freeze({ min: 0, max: 1, step: 0.1, default: 1 });
 /** Accessibility → Vibration: every buzz's strength, 0 (off) to 200% (above 100%: stronger, up to the controller's most; as in grid-game-threejs). */
@@ -247,8 +256,8 @@ export function menuItems(state, env) {
   });
   return [
     group('file', 'File', 'file', ['new', 'save', 'open']),
-    group('physics', 'Physics', 'gravity', ['gravity', 'simulation', 'reset']),
-    group('video', 'Video', 'video', ['background', 'view', 'grid', 'reflections', 'refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'particles', 'vsync', 'xrResolution']),
+    group('physics', 'Physics', 'gravity', ['gravity', 'simulation', 'physicsRate', 'grainDetail', 'clothDetail', 'reset']),
+    group('video', 'Video', 'video', ['background', 'view', 'grid', 'reflections', 'refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'liquidDetail', 'particles', 'vsync', 'xrResolution']),
     group('accessibility', 'Accessibility', 'accessibility', ['volume', 'vibration', 'textSize', 'controllerGuide']),
   ];
 }
@@ -316,6 +325,27 @@ function settingsById(state, env) {
       slider: { ...VIBRATION, value: state.vibration },
       title: "The controllers' buzz: touching, picking up and striking things (above 100%: stronger)",
     },
+    {
+      id: 'physicsRate',
+      label: `Physics Rate: ${state.physicsRate} Hz`,
+      icon: 'play',
+      slider: { ...PHYSICS_RATE, value: state.physicsRate },
+      title: 'Simulation steps a second: more holds stacks and cloth steadier and catches fast things, but costs more',
+    },
+    {
+      id: 'grainDetail',
+      label: `Grain Detail: ${percent(state.grainDetail)}`,
+      icon: 'liquidOff',
+      slider: { ...GRAIN_DETAIL, value: state.grainDetail },
+      title: 'How many grains a pour of liquid or sand is made of (finer and slower above 100%), for those made from now on',
+    },
+    {
+      id: 'clothDetail',
+      label: `Cloth Detail: ${percent(state.clothDetail)}`,
+      icon: 'detailOn',
+      slider: { ...CLOTH_DETAIL, value: state.clothDetail },
+      title: "How fine a cloth's mesh is (finer folds, slower above 100%), for those made from now on",
+    },
     { id: 'reset', label: 'Reset Objects', icon: 'rotate', title: 'The ten starting cubes dropped onto the disc again; the objects made are cleared' },
     {
       id: 'reflections',
@@ -334,7 +364,7 @@ function settingsById(state, env) {
       id: 'refraction',
       label: `Refraction: ${state.refraction ? 'On' : 'Off'}`,
       icon: state.refraction ? 'refractionOn' : 'refractionOff',
-      title: 'On: glass, water, ice and the like bend what is seen through them, by their index of refraction. Off: plainly see-through (faster)',
+      title: 'On: glass, water, ice and the like bend what is seen through them, by their index of refraction (not in XR). Off: plainly see-through (faster)',
     },
     {
       id: 'shadows',
@@ -359,6 +389,13 @@ function settingsById(state, env) {
       label: `Liquid Surfaces: ${state.liquidSurfaces ? 'Smooth' : 'Droplets'}`,
       icon: state.liquidSurfaces ? 'liquidOn' : 'liquidOff',
       title: 'Smooth: a liquid drawn as one surface round its droplets (metaballs). Droplets: each drawn as a drop (faster)',
+    },
+    {
+      id: 'liquidDetail',
+      label: `Liquid Surface Detail: ${state.liquidDetail}`,
+      icon: 'liquidOn',
+      slider: { ...LIQUID_DETAIL, value: state.liquidDetail },
+      title: "How fine a liquid's smooth surface is: its grid's cells a side (fewer: faster)",
     },
     {
       id: 'particles',
@@ -416,11 +453,15 @@ export function possibleLabels(env) {
   for (const flag of [false, true])
     for (const background of backgrounds)
       for (const view of env.views)
-        for (const item of Object.values(settingsById({ gravity: flag, paused: flag, grid: flag, reflections: flag, refraction: flag, shadows: flag, glowLights: flag, surfaceDetail: flag, liquidSurfaces: flag, particles: flag ? 'high' : 'low', volume: 1, vibration: 1, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
+        for (const item of Object.values(settingsById({ physicsRate: 60, grainDetail: 1, clothDetail: 1, liquidDetail: 56, gravity: flag, paused: flag, grid: flag, reflections: flag, refraction: flag, shadows: flag, glowLights: flag, surfaceDetail: flag, liquidSurfaces: flag, particles: flag ? 'high' : 'low', volume: 1, vibration: 1, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
           labels.add(item.label);
   // the sliders' widest values, and Controller Guide both ways
   labels.add(`Text Size: ${percent(TEXT_SIZE.max)}`);
   labels.add(`Volume: ${percent(VOLUME.max)}`);
+  labels.add(`Physics Rate: ${PHYSICS_RATE.max} Hz`);
+  labels.add(`Grain Detail: ${percent(GRAIN_DETAIL.max)}`);
+  labels.add(`Cloth Detail: ${percent(CLOTH_DETAIL.max)}`);
+  labels.add(`Liquid Surface Detail: ${LIQUID_DETAIL.max}`);
   labels.add(`Vibration: ${percent(VIBRATION.max)}`);
   labels.add(`XR Resolution: ${percent(XR_RESOLUTION.max)} (on release)`);
   for (const flag of [false, true]) {
