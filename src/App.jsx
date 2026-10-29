@@ -9,7 +9,8 @@ import { XR_RESOLUTION, setXRViewportScale } from './xrResolution.js';
 import { CardboardOverlay, canUseCardboard, enterCardboard, exitCardboard } from './Cardboard.jsx';
 import { startingBodies } from './Physics.jsx';
 import { openScene, saveScene } from './sceneFile.js';
-import { initSound, setSoundOn } from './sound.js';
+import { initSound, setVolume } from './sound.js';
+import { setVibration } from './grip.js';
 import {
   MENU_TOGGLE,
   PICK_PREFIX,
@@ -32,6 +33,8 @@ import {
   slideEndId,
   slideId,
   snapToSlider,
+  VIBRATION,
+  VOLUME,
   toolsPanel,
   viewPanel,
 } from './menu.js';
@@ -95,8 +98,31 @@ const toggleIn = (id) => (list) => (list.includes(id) ? list.filter((x) => x !==
 
 // Accessibility settings and XR Resolution are remembered in this browser
 const TOOLS_KEY = 'physics-sandbox.tools';
-const SOUND_KEY = 'physics-sandbox.sound';
 const REFLECTIONS_KEY = 'physics-sandbox.reflections';
+const EFFECTS_KEY = 'physics-sandbox.effects';
+
+/**
+ * Video's costly effects, as last left: { refraction, shadows, glowLights,
+ * surfaceDetail, liquidSurfaces (metaballs), particles ('high' / 'low') }.
+ * At first all on, but Refraction off in a headset (it draws the scene again).
+ */
+function loadEffects() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(EFFECTS_KEY)) ?? {};
+  } catch {
+    // (the defaults)
+  }
+  const flag = (key, fallback) => (typeof saved[key] === 'boolean' ? saved[key] : fallback);
+  return {
+    refraction: flag('refraction', !isHeadsetBrowser()),
+    shadows: flag('shadows', true),
+    glowLights: flag('glowLights', true),
+    surfaceDetail: flag('surfaceDetail', true),
+    liquidSurfaces: flag('liquidSurfaces', true),
+    particles: saved.particles === 'low' ? 'low' : 'high',
+  };
+}
 
 function loadReflections() {
   try {
@@ -106,13 +132,6 @@ function loadReflections() {
   }
 }
 
-function loadSound() {
-  try {
-    return JSON.parse(localStorage.getItem(SOUND_KEY)) !== false;
-  } catch {
-    return true;
-  }
-}
 const ACCESSIBILITY_KEY = 'physics-sandbox.accessibility';
 const XR_RESOLUTION_KEY = 'physics-sandbox.xrResolution';
 const VSYNC_KEY = 'physics-sandbox.vsync';
@@ -156,6 +175,8 @@ function loadAccessibility() {
     // (storage blocked or unreadable: the defaults)
   }
   return {
+    volume: snapToSlider(VOLUME, saved.volume),
+    vibration: snapToSlider(VIBRATION, saved.vibration),
     textSize: snapToSlider(TEXT_SIZE, saved.textSize),
     controllerGuide: saved.controllerGuide === true,
   };
@@ -180,17 +201,16 @@ function useViewerState() {
       // (not remembered)
     }
   }, [reflections]);
-  const [sceneScale, setSceneScale] = useState(1); // XR: both grips in mid-air scale it (see Grab.jsx)
-  const [scaleReset, setScaleReset] = useState(0); // counts presses of the scale, each one back to real size
-  const [sound, setSound] = useState(loadSound); // Options → Physics → Sound
+  const [effects, setEffects] = useState(loadEffects); // Options → Video's costly effects (see loadEffects)
   useEffect(() => {
-    setSoundOn(sound);
     try {
-      localStorage.setItem(SOUND_KEY, JSON.stringify(sound));
+      localStorage.setItem(EFFECTS_KEY, JSON.stringify(effects));
     } catch {
       // (not remembered)
     }
-  }, [sound]);
+  }, [effects]);
+  const [sceneScale, setSceneScale] = useState(1); // XR: both grips in mid-air scale it (see Grab.jsx)
+  const [scaleReset, setScaleReset] = useState(0); // counts presses of the scale, each one back to real size
   useEffect(() => {
     try {
       localStorage.setItem(TOOLS_KEY, JSON.stringify(tools));
@@ -200,7 +220,10 @@ function useViewerState() {
   }, [tools]);
   const [groups, setGroups] = useState([]); // the groups (Physics / Video / Accessibility) whose settings are open, likewise
   const [dropdowns, setDropdowns] = useState([]); // the dropdowns whose lists are open, likewise
-  const [accessibility, setAccessibility] = useState(loadAccessibility); // { textSize, controllerGuide }
+  const [accessibility, setAccessibility] = useState(loadAccessibility); // { volume, vibration, textSize, controllerGuide }
+  useEffect(() => setVolume(accessibility.volume), [accessibility.volume]);
+  useEffect(() => setVibration(accessibility.vibration), [accessibility.vibration]);
+  const unmutedVolume = useRef(VOLUME.default); // (M: muted, then back to this)
   useEffect(() => {
     try {
       localStorage.setItem(ACCESSIBILITY_KEY, JSON.stringify(accessibility));
@@ -237,8 +260,15 @@ function useViewerState() {
       setBodies,
       toggleGravity: () => setGravity((v) => !v),
       setGravity,
-      toggleSound: () => setSound((v) => !v),
+      setVolume: (v) => setAccessibility((a) => ({ ...a, volume: snapToSlider(VOLUME, v) })),
+      setVibration: (v) => setAccessibility((a) => ({ ...a, vibration: snapToSlider(VIBRATION, v) })),
+      toggleMute: () =>
+        setAccessibility((a) => {
+          if (a.volume > 0) unmutedVolume.current = a.volume;
+          return { ...a, volume: a.volume > 0 ? 0 : unmutedVolume.current };
+        }),
       toggleReflections: () => setReflections((v) => !v),
+      toggleEffect: (id) => setEffects((e) => ({ ...e, [id]: id === 'particles' ? (e.particles === 'low' ? 'high' : 'low') : !e[id] })),
       setSceneScale,
       resetScale: () => setScaleReset((n) => n + 1),
       setMaterial: (material) => setTools((t) => ({ ...t, material })),
@@ -275,8 +305,8 @@ function useViewerState() {
     tool: tools.tool,
     material: tools.material,
     toolsOpen: tools.open,
-    sound,
     reflections,
+    ...effects,
     sceneScale,
     scaleReset,
     background,
@@ -305,7 +335,7 @@ function useKeyboard(actions) {
       KeyG: actions.toggleGravity,
       KeyP: actions.togglePause,
       KeyR: actions.resetBodies,
-      KeyM: actions.toggleSound,
+      KeyM: actions.toggleMute,
       Enter: actions.toggleMenu,
       NumpadEnter: actions.toggleMenu,
       Escape: actions.toggleMenu,
@@ -779,7 +809,7 @@ export default function App() {
     else if (id === 'gravity') actions.toggleGravity();
     else if (id === 'simulation') actions.togglePause();
     else if (id === 'reset') actions.resetBodies();
-    else if (id === 'sound') actions.toggleSound();
+    else if (id === 'new') actions.setBodies([]);
     else if (id === 'save')
       saveScene({ bodies: state.bodies, registry, gravity: state.gravity }).catch((e) => {
         console.error('[physics-sandbox] could not save the scene', e);
@@ -801,10 +831,13 @@ export default function App() {
     else if (id === 'controllerGuide') actions.toggleControllerGuide();
     else if (id === 'vsync') actions.toggleVSync();
     else if (id === 'reflections') actions.toggleReflections();
+    else if (['refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'particles'].includes(id)) actions.toggleEffect(id);
     else if (id === SCALE_RESET) actions.resetScale();
   };
   const slideTo = (id, value) => {
     if (id === 'textSize') actions.setTextSize(value);
+    else if (id === 'volume') actions.setVolume(value);
+    else if (id === 'vibration') actions.setVibration(value);
     else if (id === 'xrResolution') actions.setXRResolution(value);
   };
   const choose = (id, value) => {

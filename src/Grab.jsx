@@ -12,7 +12,16 @@ import { distanceOutside as shapeDistance } from './shapes.js';
 // at a panel takes the panel, and pointed at an object, picks that up from
 // afar. A held object stays fixed in the hand, and let go it flies on at the
 // hand's speed and spin (see Holds in Physics.jsx). The probe buzzes softly
-// while it's inside an object, so you can feel what you could take.
+// while it's inside an object, so you can feel what you could take (not while
+// its grip is held, nor on something held); a held object striking or sliding
+// on another buzzes the hand holding it (see ContactSounds).
+//
+// The other grip pressed with its probe on the object already held: both
+// hands hold it, to turn and resize it. It follows the hands' midpoint, turns
+// with the line between the probes (and with the hands' twist about it), and
+// grows or shrinks with the distance between them; with a trigger held, only
+// along that line (the line when the trigger was pressed), stretching it.
+// Let go of either grip and its new size is its own (its collider too).
 //
 // The panels dock on a controller, stacked upward, tipped toward the eyes:
 // Options on the left, the View panel and the Tools panel above it on the
@@ -45,10 +54,10 @@ const PROBE_REACH = 0.01; // m: a probe this near an object (beyond touching it)
 const RAY_REACH = 10; // m: a grip takes an object pointed at this far away at most
 export const PROBE_COLOR = '#d9642b'; // xr-music-threejs's picks' orange
 
-const BUZZ_STRENGTH = 0.15;
+const BUZZ_STRENGTH = 0.08;
 const BUZZ_MS = 60;
 const BUZZ_EVERY = 0.05; // seconds between pulses, so they overlap into a steady hum
-const PULSE = { grab: [0.6, 50], detach: [0.4, 30], dock: [0.9, 80], zone: [0.25, 20], touch: [0.35, 25] }; // [strength, ms]
+const PULSE = { grab: [0.6, 50], detach: [0.4, 30], dock: [0.9, 80], zone: [0.25, 20], touch: [0.2, 20] }; // [strength, ms]
 
 /** Docked on one controller, the panels stand stacked upward in this order (the first nearest it). */
 const DOCK_STACK = ['view', 'tools', 'menu'];
@@ -80,6 +89,22 @@ const ROLL_RATE = Math.PI; // radians per second at full tilt
 // scaling the scene
 export const SCENE_SCALE = { min: 0.05, max: 20 }; // how small and big the scene gets
 const SCALE_JOIN_S = 0.3; // the second grip this soon after the first, which took an object it pointed at, still scales (and drops it)
+// resizing an object with both hands
+const RESIZE = { min: 0.2, max: 10 }; // how much smaller or bigger than made (on average) an object gets
+const _q0 = new THREE.Quaternion();
+const _q1 = new THREE.Quaternion();
+const _m3 = new THREE.Matrix3();
+const _r3 = new THREE.Matrix3();
+const _one = new THREE.Vector3(1, 1, 1);
+
+/** How far `dq` turns about unit `axis` (its twist about it), in radians, -π to π. */
+function twistAbout(dq, axis) {
+  const proj = dq.x * axis.x + dq.y * axis.y + dq.z * axis.z;
+  let angle = 2 * Math.atan2(proj, dq.w);
+  if (angle > Math.PI) angle -= 2 * Math.PI;
+  if (angle < -Math.PI) angle += 2 * Math.PI;
+  return angle;
+}
 
 const _world = new THREE.Matrix4();
 const _local = new THREE.Matrix4();
@@ -126,16 +151,20 @@ function distanceOutside(entry, p) {
  * right }, refs to the probes' meshes, placed here; `home`: the menu's {
  * position, rotation } without controllers, `homeScale` its scale there;
  * `textSize`: Accessibility → Text Size (the panels that much bigger);
- * `onScale(scale)`: the scene scale changed (both grips in mid-air).
+ * `onScale(scale)`: the scene scale changed (both grips in mid-air);
+ * `onResize(id, transform)`: an object was resized with both hands (its new 3×3, see Physics.jsx makeBody).
  * Returns a ref to which hands' grips hold something now ({ left, right }),
  * whose sticks are then theirs, not the player's.
  */
-export function useControllerGrips({ panels, origin, registry, holds, probes, textSize, home, homeScale, onScale }) {
+export function useControllerGrips({ panels, origin, registry, holds, probes, textSize, home, homeScale, onScale, onResize }) {
   const gl = useThree((s) => s.gl);
-  // hand -> { target: 'body', id, offset, point, byRay, at } | { target: 'panel', key, offset, point, size, grow, zone } | { target: 'scale' } | { target: 'none' }
+  // hand -> { target: 'body', id, offset, point, byRay, at } | { target: 'panel', key, offset, point, size, grow, zone } | { target: 'scale' } | { target: 'resize', id } | { target: 'none' }
   const grabs = useRef({});
   const scaling = useRef(null); // both grips in mid-air: { k0, turn0, mid0 (world), span0, angle0 (tracking space) }
   const reported = useRef(1);
+  // both hands on one object: { id, owner (the hand Holds has it by), lock (a trigger held), base, now }, each pose
+  // { position, quaternion (the body's), transform (Matrix3: its resizing), tips: { left, right } (probes, world), grips: { left, right } (quaternions) }
+  const resizing = useRef(null);
   const docks = useRef(Object.fromEntries(Object.entries(FIRST_DOCK).map(([key, hand]) => [key, { dock: hand }]))); // key -> { dock: hand | null, on, fly }
   const taps = useRef({}); // hand -> { pressedAt, tappedAt, count }
   const pressed = useRef({});
@@ -194,7 +223,8 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       controllerTip(c.rayMatrix, _tip);
       let best = null;
       for (const entry of bodies()) {
-        const d = distanceOutside(entry, _tip) - PROBE_RADIUS * k;
+        // (measured in the shape's own space: a resized one's distances scale back)
+        const d = distanceOutside(entry, _tip) * (entry.measure.size / entry.shape.size) - PROBE_RADIUS * k;
         if (d <= PROBE_REACH * k && (!best || d < best.d)) best = { id: entry.def.id, d };
       }
       return best?.id ?? null;
@@ -281,17 +311,72 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       if (grabs.current[other]?.id === id) grabs.current[other] = { target: 'none' };
       if (!entry?.mesh.current || !holds.take(id, hand)) return;
       buzz(hand, PULSE.grab);
-      const mesh = entry.mesh.current;
-      mesh.updateWorldMatrix(true, false);
+      grabs.current[hand] = bodyGrab(c, id);
+      grabs.current[hand].byRay = byRay;
+    };
+
+    /** A grip's hold on object `id` as it is now: its pose (the body's, not the mesh's resizing) in the grip's space. */
+    const bodyGrab = (c, id) => {
+      const h = holds.map.get(id);
+      _world.compose(h.position, h.quaternion, _one);
       _gripInverse.copy(c.grip).invert();
-      grabs.current[hand] = {
+      return {
         target: 'body',
         id,
-        offset: _gripInverse.clone().multiply(mesh.matrixWorld),
-        point: mesh.getWorldPosition(new THREE.Vector3()).applyMatrix4(_gripInverse),
-        byRay,
+        offset: _gripInverse.clone().multiply(_world),
+        point: h.position.clone().applyMatrix4(_gripInverse),
+        byRay: false,
         at: now,
       };
+    };
+
+    /** Object `id`'s pose for resizing, as it is now. */
+    const resizePose = (id, transform) => {
+      const h = holds.map.get(id);
+      const pose = { position: h.position.clone(), quaternion: h.quaternion.clone(), transform: transform.clone(), tips: {}, grips: {} };
+      for (const hand of HANDS) {
+        pose.tips[hand] = controllerTip(controllers[hand].rayMatrix, new THREE.Vector3());
+        controllers[hand].grip.decompose(_pos, (pose.grips[hand] = new THREE.Quaternion()), _scale);
+      }
+      return pose;
+    };
+
+    /** The other hand, holding object `id`, is joined by this one: both turn and resize it. */
+    const startResize = (id) => {
+      const entry = registry.get(id);
+      const h = holds.map.get(id);
+      if (!entry || !h) return;
+      h.hands = [...HANDS];
+      const transform = new THREE.Matrix3();
+      if (entry.def.transform) transform.fromArray(entry.def.transform);
+      const base = resizePose(id, transform);
+      resizing.current = { id, owner: h.by, lock: false, base, now: base };
+      holds.resizing = true; // (the triggers lock the resizing now, rather than working the tools)
+      for (const hand of HANDS) {
+        grabs.current[hand] = { target: 'resize', id };
+        buzz(hand, PULSE.grab);
+      }
+    };
+
+    /** `hand` lets go while both held object `id`: its new size is kept, and the other hand holds it on. */
+    const endResize = (hand) => {
+      const r = resizing.current;
+      resizing.current = null;
+      holds.resizing = false;
+      const other = otherHand(hand);
+      const h = holds.map.get(r.id);
+      if (h) delete h.hands;
+      const t = r.now.transform.elements;
+      const identity = t.every((x, i) => Math.abs(x - (i % 4 === 0 ? 1 : 0)) < 1e-4);
+      onResize?.(r.id, identity ? undefined : [...t]);
+      grabs.current[other] = { target: 'none' };
+      const c = controllers[other];
+      if (!c || !pressed.current[other] || !h) {
+        holds.release(r.id, r.owner);
+        return;
+      }
+      if (r.owner !== other) holds.take(r.id, other);
+      grabs.current[other] = bodyGrab(c, r.id);
     };
 
     /** Both grips in mid-air: scaling starts from here. */
@@ -320,6 +405,12 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       grabs.current[hand] = { target: 'none' };
       // the probe on an object: that, before anything
       const touched = bodyTouched(c);
+      const other0 = grabs.current[otherHand(hand)];
+      if (touched != null && other0?.target === 'body' && other0.id === touched && holds.isHeld(touched, otherHand(hand)) && controllers[otherHand(hand)]) {
+        // the other hand holds it: both turn and resize it
+        startResize(touched);
+        return;
+      }
       if (touched != null) {
         takeBody(hand, c, touched);
         return;
@@ -364,6 +455,10 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       if (tap) tap.tappedAt = tap.count < 3 && now - tap.pressedAt <= GRIP_TAP_S ? now : -Infinity; // (a short press: a tap, unless it ended a triple)
       const g = grabs.current[hand];
       delete grabs.current[hand];
+      if (g?.target === 'resize') {
+        if (resizing.current) endResize(hand);
+        return;
+      }
       if (g?.target === 'scale') {
         // one grip let go: scaling's done, the other grip holds nothing now
         scaling.current = null;
@@ -390,6 +485,58 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       pressed.current[hand] = down;
     }
 
+    // both hands on one object: turned with them, resized by their distance (along their line, a trigger held)
+    const rz = resizing.current;
+    if (rz && controllers.left && controllers.right && holds.isHeld(rz.id)) {
+      const lock = controllers.left.trigger || controllers.right.trigger;
+      if (lock !== rz.lock) {
+        // a trigger pressed or let go: carry on from here
+        rz.base = resizePose(rz.id, rz.now.transform);
+        rz.lock = lock;
+        buzz('left', PULSE.zone);
+        buzz('right', PULSE.zone);
+      }
+      const base = rz.base;
+      const tipL = controllerTip(controllers.left.rayMatrix, new THREE.Vector3());
+      const tipR = controllerTip(controllers.right.rayMatrix, new THREE.Vector3());
+      const span0 = base.tips.right.clone().sub(base.tips.left);
+      const span = tipR.clone().sub(tipL);
+      const len0 = Math.max(span0.length(), 0.01);
+      const axis = span0.clone().divideScalar(len0);
+      // the swing of the line between the probes, and the hands' twist about it
+      const swing = new THREE.Quaternion().setFromUnitVectors(axis, span.clone().normalize());
+      let twist = 0;
+      for (const hand of HANDS) {
+        controllers[hand].grip.decompose(_pos, _q1, _scale);
+        twist += twistAbout(_q0.copy(_q1).multiply(base.grips[hand].clone().invert()), axis) / 2;
+      }
+      const turn = swing.multiply(new THREE.Quaternion().setFromAxisAngle(axis, twist));
+      // how much bigger: kept within RESIZE of as made
+      let f = Math.max(span.length(), 0.01) / len0;
+      const det0 = Math.abs(base.transform.determinant());
+      const det = (x) => det0 * (rz.lock ? x : x * x * x);
+      if (det(f) > RESIZE.max ** 3) f = rz.lock ? RESIZE.max ** 3 / det0 : Math.cbrt(RESIZE.max ** 3 / det0);
+      if (det(f) < RESIZE.min ** 3) f = rz.lock ? RESIZE.min ** 3 / det0 : Math.cbrt(RESIZE.min ** 3 / det0);
+      // the stretch, in the world as it was: all ways, or along the line only
+      const stretch = new THREE.Matrix3().multiplyScalar(0);
+      if (rz.lock) {
+        const a = axis;
+        const g = f - 1;
+        stretch.set(1 + g * a.x * a.x, g * a.x * a.y, g * a.x * a.z, g * a.y * a.x, 1 + g * a.y * a.y, g * a.y * a.z, g * a.z * a.x, g * a.z * a.y, 1 + g * a.z * a.z);
+      } else stretch.set(f, 0, 0, 0, f, 0, 0, 0, f);
+      const mid0 = base.tips.left.clone().add(base.tips.right).multiplyScalar(0.5);
+      const mid = tipL.clone().add(tipR).multiplyScalar(0.5);
+      const position = base.position.clone().sub(mid0).applyMatrix3(stretch).applyQuaternion(turn).add(mid);
+      const quaternion = turn.clone().multiply(base.quaternion);
+      // the body turns rigidly; the stretch, carried into its own space, is its resizing: R0⁻¹ S R0 T0
+      _r3.setFromMatrix4(_world.makeRotationFromQuaternion(base.quaternion));
+      _m3.copy(_r3).transpose().multiply(stretch).multiply(_r3).multiply(base.transform);
+      rz.now = { ...rz.now, position, quaternion, transform: _m3.clone() };
+      holds.move(rz.id, rz.owner, position, quaternion);
+      const entry = registry.get(rz.id);
+      if (entry) entry.preview = (entry.preview ?? new THREE.Matrix4()).setFromMatrix3(_m3);
+    }
+
     // what each grip holds, and its stick on it
     for (const hand of HANDS) {
       const c = controllers[hand];
@@ -397,7 +544,7 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
       // (an object another hand or a pointer took away isn't this hand's any more)
       if (g?.target === 'body' && !holds.isHeld(g.id, hand)) grabs.current[hand] = { target: 'none' };
       holding.current[hand] = Boolean(c && g && g.target !== 'none');
-      if (!c || !g || g.target === 'none' || g.target === 'scale') continue;
+      if (!c || !g || g.target === 'none' || g.target === 'scale' || g.target === 'resize') continue;
       if (g.target === 'panel' && !groupOf(g.key)) continue;
       const { x, y } = c.stick;
       // what's held: its pose in the hand, and the point it's held by, both shift in the grip's space
@@ -439,11 +586,13 @@ export function useControllerGrips({ panels, origin, registry, holds, probes, te
         probe.visible = Boolean(c);
         if (c) probe.position.copy(controllerTip(c.rayMatrix, _v).applyMatrix4(_originInverse));
       }
-      if (!c || grabs.current[hand]?.target === 'body') {
+      // (not while its grip is held, whatever it holds)
+      if (!c || pressed.current[hand]) {
         touching.current[hand] = null;
         continue;
       }
-      const touched = bodyTouched(c);
+      let touched = bodyTouched(c);
+      if (touched != null && holds.isHeld(touched)) touched = null; // (nor on something held)
       if (touched != null && touched !== touching.current[hand]) {
         buzz(hand, PULSE.touch);
         nextBuzz.current[hand] = now + BUZZ_EVERY;

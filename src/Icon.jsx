@@ -16,10 +16,14 @@ import selectCursor from 'lineicons/assets/svgs/regular/select-cursor-1.svg?raw'
 import arrowDown from 'lineicons/assets/svgs/regular/arrow-downward.svg?raw';
 import floppy from 'lineicons/assets/svgs/regular/floppy-disk-1.svg?raw';
 import folder from 'lineicons/assets/svgs/regular/folder-1.svg?raw';
+import filePlus from 'lineicons/assets/svgs/regular/file-plus-circle.svg?raw';
 import fileMultiple from 'lineicons/assets/svgs/regular/file-multiple.svg?raw';
 import volume from 'lineicons/assets/svgs/regular/volume-high.svg?raw';
 import volumeMute from 'lineicons/assets/svgs/regular/volume-mute.svg?raw';
 import palette from 'lineicons/assets/svgs/regular/colour-palette-3.svg?raw';
+import bulb from 'lineicons/assets/svgs/regular/bulb-2.svg?raw';
+import layers from 'lineicons/assets/svgs/regular/layers-1.svg?raw';
+import cloud from 'lineicons/assets/svgs/regular/cloud-2.svg?raw';
 import { SHAPES } from './shapes.js';
 
 // Lineicons ship with a fixed fill; recolour to follow the surrounding text
@@ -167,7 +171,31 @@ const gravityOff = gravity.replace(
 </svg>`,
 );
 
+/** `svg` struck through, for an effect turned off. */
+const struck = (svg) => svg.replace('</svg>', '<path d="M3.5 3.5 20.5 20.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>');
+const drawn = (d) =>
+  `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="${d}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+// Refraction: a ray bent as it passes through a block
+const refraction = drawn('M7 4.75h10v14.5H7ZM2.75 8.5 7 10.25l10 3.5 4.25 1.75');
+// Shadows: a ball and its shadow on the ground
+const shadows = drawn('M15.25 9a4.25 4.25 0 1 1-8.5 0 4.25 4.25 0 0 1 8.5 0ZM4.75 19.25c0 1 3.25 1.75 7.25 1.75s7.25-.75 7.25-1.75-3.25-1.75-7.25-1.75-7.25.75-7.25 1.75Z');
+// Liquid surfaces: smooth, a drop; droplets, three of them
+const liquidSmooth = drawn('M12 3.25s6.25 6.6 6.25 10.75a6.25 6.25 0 0 1-12.5 0C5.75 9.85 12 3.25 12 3.25Z');
+const liquidDrops = drawn('M7.5 7.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0ZM16.25 9a3.25 3.25 0 1 1-6.5 0 3.25 3.25 0 0 1 6.5 0ZM12.75 17.5a2.75 2.75 0 1 1-5.5 0 2.75 2.75 0 0 1 5.5 0ZM21.25 16.25a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z');
+
 const ICONS = {
+  refractionOn: refraction,
+  refractionOff: struck(refraction),
+  shadowsOn: shadows,
+  shadowsOff: struck(shadows),
+  glowOn: recolour(bulb),
+  glowOff: struck(recolour(bulb)),
+  detailOn: recolour(layers),
+  detailOff: struck(recolour(layers)),
+  liquidOn: liquidSmooth,
+  liquidOff: liquidDrops,
+  particlesHigh: recolour(cloud),
+  particlesLow: struck(recolour(cloud)).replace('M3.5 3.5 20.5 20.5', 'M6 18.5 18 18.5'),
   mono: recolour(eye),
   stereo: eyes,
   vr: headset,
@@ -188,11 +216,15 @@ const ICONS = {
   gravity,
   gravityOff,
   file: recolour(fileMultiple),
+  newScene: recolour(filePlus),
   save: recolour(floppy),
   open: recolour(folder),
   soundOn: recolour(volume),
   soundOff: recolour(volumeMute),
   material: recolour(palette),
+  // Vibration (as grid-game-threejs's): a controller's handle with buzz lines either side, or still and struck through
+  vibrationOn: `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M9.1 4.3h5.8v15.4H9.1ZM5.8 7.7 4.3 10.1l1.5 2.4-1.5 2.4M18.2 7.7l1.5 2.4-1.5 2.4 1.5 2.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  vibrationOff: `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M9.1 4.3h5.8v15.4H9.1ZM4.3 20.2 19.7 3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   reflectionsOn: recolour(sun),
   reflectionsOff: recolour(sun).replace('</svg>', '<path d="M3.5 3.5 20.5 20.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'),
   edges,

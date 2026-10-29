@@ -13,8 +13,8 @@ import * as THREE from 'three';
 
 const HANDS = ['left', 'right'];
 /** What each part does, by hand (motion-controllers component ids); parts with nothing to do get no label. */
-const GRIP = 'Hold: pick up what the probe\ntouches or you point at, or a menu\nBoth in mid-air: scale the scene\nTap twice: dock / undock\nTap 3 times: menus here';
-const TRIGGER = 'Point and press\nSelect: drag an object\nA shape: make one';
+const GRIP = 'Hold: pick up what the probe\ntouches or you point at, or a menu\nOn what the other holds: turn, resize\nBoth in mid-air: scale the scene\nTap twice: dock / undock\nTap 3 times: menus here';
+const TRIGGER = 'Point and press\nSelect: drag an object\nA shape: make one\nResizing: stretch along the hands\' line';
 const TEXTS = {
   left: { 'xr-standard-trigger': TRIGGER, 'xr-standard-squeeze': GRIP, 'xr-standard-thumbstick': 'Move\nGripping: push / pull, roll' },
   right: { 'xr-standard-trigger': TRIGGER, 'xr-standard-squeeze': GRIP, 'xr-standard-thumbstick': 'Turn\nGripping: push / pull, roll' },

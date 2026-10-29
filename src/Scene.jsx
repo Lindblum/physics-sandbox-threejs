@@ -12,9 +12,10 @@ import { Probes, useControllerGrips } from './Grab.jsx';
 import { SOLID_BACKGROUND } from './menu.js';
 import { FramePacing } from './FramePacing.jsx';
 import { Physics, useRapier } from '@react-three/rapier';
-import { AirDrag, ContactSounds, Disc, GlowLights, Holds, MaterialLabels, Particles, SandboxBodies, makeBody, withMade } from './Physics.jsx';
+import { AirDrag, ContactSounds, Disc, GlowLights, Holds, MaterialLabels, Particles, SandboxBodies, makeBody, particles, setLookQuality, withMade } from './Physics.jsx';
 import { shapeOf } from './shapes.js';
-import { randomMaterial } from './materials.js';
+import { materialById, randomMaterial } from './materials.js';
+import { Fluids } from './Fluids.jsx';
 import { PhoneStereoCameraFeed, PhoneStereoXR } from './PhoneStereo.jsx';
 import { SideBySide } from './SideBySide.jsx';
 import { Interlaced } from './Interlaced.jsx';
@@ -42,6 +43,7 @@ class AssetBoundary extends Component {
 // top is the floor you stand on
 const LOOK_AT = [0, 0.15, 0];
 const XR_START = [0, 0, 1.5];
+const ENVIRONMENT_INTENSITY = 0.5; // the studio's light on the objects, besides the sun's (fuller, it washes them out)
 const GRAVITY = [0, -9.81, 0];
 const NO_GRAVITY = [0, 0, 0];
 // Without controllers (gaze, phones) the XR panel stands at waist height,
@@ -115,53 +117,42 @@ function Backdrop({ background }) {
 }
 
 /**
- * What the objects reflect (the metals most): the skybox when it is
- * showing, otherwise a neutral studio (the stars would look wrong against
- * passthrough or a solid colour). Video → Reflections off: nothing (only the
- * lights light them; faster).
+ * What the objects reflect (the metals most): a neutral studio, whatever is
+ * behind them (the star sky is too dark to mirror: metals and mercury would
+ * look black in it, and stars look wrong against passthrough or a solid
+ * colour). Video → Reflections off: nothing (only the lights light them; faster).
  */
-function Environment({ sky, reflections }) {
+function Environment({ reflections }) {
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
-  const environment = useMemo(() => {
-    const pmrem = new THREE.PMREMGenerator(gl);
-    let target;
-    if (sky) {
-      sky.mapping = THREE.EquirectangularReflectionMapping;
-      sky.colorSpace = THREE.SRGBColorSpace;
-      target = pmrem.fromEquirectangular(sky);
-    } else {
-      const room = new RoomEnvironment();
-      target = pmrem.fromScene(room, 0.04);
-      room.dispose();
-    }
-    pmrem.dispose();
-    return target;
-  }, [gl, sky]);
-  useEffect(() => () => environment.dispose(), [environment]);
+  // (made and disposed in the one effect: made in a memo, React's dev double run would dispose it and keep using it)
   useEffect(() => {
     if (!reflections) return;
-    scene.environment = environment.texture;
+    const pmrem = new THREE.PMREMGenerator(gl);
+    const room = new RoomEnvironment();
+    const target = pmrem.fromScene(room, 0.04);
+    room.dispose();
+    pmrem.dispose();
+    scene.environment = target.texture;
+    scene.environmentIntensity = ENVIRONMENT_INTENSITY;
     return () => {
-      if (scene.environment === environment.texture) scene.environment = null;
+      if (scene.environment === target.texture) scene.environment = null;
+      target.dispose();
     };
-  }, [scene, environment, reflections]);
+  }, [gl, scene, reflections]);
   return null;
 }
 
-function SkyEnvironment({ reflections }) {
-  return <Environment sky={useLoader(THREE.TextureLoader, SKY_URL)} reflections={reflections} />;
-}
 
-/** A sun casting shadows onto the disc, and a soft fill from the sky. */
-function Lights() {
+/** A sun casting shadows onto the disc (Video → Shadows), and a soft fill from the sky. */
+function Lights({ shadows }) {
   return (
     <>
       <hemisphereLight args={['#dfe8ff', '#3a3f4a', 0.6]} />
       <directionalLight
         position={[1.5, 4, 1]}
         intensity={2}
-        castShadow
+        castShadow={shadows}
         shadow-mapSize={[1024, 1024]}
         shadow-camera-left={-1.5}
         shadow-camera-right={1.5}
@@ -197,12 +188,12 @@ const _hand = new THREE.Vector3();
  * player's size (the scene scale's inverse); `onScale(scale)` hears it
  * change; `resetScale` changing puts it back to real size, where you stand.
  */
-function Player({ origin, panels, registry, holds, textSize, homeScale, onScale, resetScale, children }) {
+function Player({ origin, panels, registry, holds, textSize, homeScale, onScale, onResize, resetScale, children }) {
   const left = useRef(null);
   const right = useRef(null);
   const probes = useMemo(() => ({ left, right }), []);
   const gl = useThree((s) => s.gl);
-  const holding = useControllerGrips({ panels, origin, registry, holds, probes, textSize, home: MENU_HOME, homeScale, onScale });
+  const holding = useControllerGrips({ panels, origin, registry, holds, probes, textSize, home: MENU_HOME, homeScale, onScale, onResize });
   // back to real size: the floor the real floor again, your head where it was over it
   useEffect(() => {
     const o = origin.current;
@@ -247,6 +238,7 @@ function Player({ origin, panels, registry, holds, textSize, homeScale, onScale,
 const DRAG = 'pointer'; // who holds an object dragged with Select (see Holds)
 const CLICK_SLOP = 6; // px a click may move and still be one (more: orbiting the view)
 const DRAG_RANGE = [0.2, 20]; // m: how near and far the mouse wheel brings a dragged object
+const STRETCH = { min: 0.2, max: 10 }; // Shift + middle-drag: how much shorter or longer a stretch makes an object, at a time
 
 /**
  * Which pointers work the tools: the mouse, a touch screen, controller rays
@@ -258,13 +250,17 @@ const toolPointer = (e) => !e.internalPointer || e.pointerType === 'ray';
 /**
  * The tools on the objects and the disc. Select: press on an object to pick it
  * up; it follows the pointer at the distance it was taken from (the mouse
- * wheel moves it nearer or further), and let go it's thrown. The shapes: a
+ * wheel moves it nearer or further), and let go it's thrown. The middle
+ * button does the same with any tool, as a controller's grip does; with Shift,
+ * it stretches the object along the drag instead (its far side stays put, the
+ * side taken follows the pointer: out longer, in shorter), and `onResize(id,
+ * transform)` keeps its new shape when it's let go. The shapes: a
  * click (or a controller's trigger) on the disc or an object makes one there,
  * resting on the face clicked, of the Material chosen (or a random one). Any
  * pointer over an object puts it in `pointed` (pointer id -> object id), for
  * its label. Returns [handlers(id) for an object's mesh, the disc's onClick].
  */
-function useTools({ tool, material, registry, holds, setBodies, pointed }) {
+function useTools({ tool, material, registry, holds, setBodies, pointed, onResize }) {
   const controls = useThree((s) => s.controls);
   const drag = useRef(null); // { id, pointerId, ray, distance, offset }
 
@@ -277,38 +273,100 @@ function useTools({ tool, material, registry, holds, setBodies, pointed }) {
       if (controls) controls.enabled = true;
       return;
     }
-    holds.move(d.id, DRAG, d.ray.at(d.distance, _hand).add(d.offset));
+    if (d.stretch) stretchTo(d, d.ray.at(d.distance, _hand));
+    else holds.move(d.id, DRAG, d.ray.at(d.distance, _hand).add(d.offset));
   });
+
+  /** Shift + middle-drag: the object stretched (or squashed) along the drag, from where it was taken to `to`. */
+  const stretchTo = (d, to) => {
+    const { start, center, quaternion, transform } = d.stretch;
+    const entry = registry.get(d.id);
+    if (!entry) return;
+    const move = to.clone().sub(start);
+    const length = move.length();
+    if (length < 0.002) return;
+    const axis = move.divideScalar(length);
+    // how far it reaches along the drag, each way from its centre (its shape as it was, turned as it is)
+    let ahead = 0;
+    let behind = 0;
+    for (const piece of entry.shape.hull)
+      for (const p of piece) {
+        const along = _hand.copy(p).applyMatrix3(transform).applyQuaternion(quaternion).dot(axis);
+        ahead = Math.max(ahead, along);
+        behind = Math.max(behind, -along);
+      }
+    const span = ahead + behind;
+    // out from the centre: longer by the drag; toward it: shorter
+    const outward = Math.sign(start.clone().sub(center).dot(axis)) || 1;
+    const f = THREE.MathUtils.clamp((span + outward * length) / span, STRETCH.min, STRETCH.max);
+    // the far side stays put
+    const near = outward > 0 ? behind : ahead;
+    const position = center.clone().addScaledVector(axis, outward * (f - 1) * near);
+    const g = f - 1;
+    const stretch = new THREE.Matrix3().set(
+      1 + g * axis.x * axis.x, g * axis.x * axis.y, g * axis.x * axis.z,
+      g * axis.y * axis.x, 1 + g * axis.y * axis.y, g * axis.y * axis.z,
+      g * axis.z * axis.x, g * axis.z * axis.y, 1 + g * axis.z * axis.z,
+    );
+    // in its own space: R⁻¹ S R T (it turns rigidly; the stretch is its resizing)
+    const turn = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(quaternion));
+    const resized = turn.clone().transpose().multiply(stretch).multiply(turn).multiply(transform);
+    d.stretch.now = resized;
+    holds.move(d.id, DRAG, position, quaternion);
+    entry.preview = (entry.preview ?? new THREE.Matrix4()).setFromMatrix3(resized);
+  };
 
   const endDrag = (e) => {
     const d = drag.current;
     if (!d || d.pointerId !== e.pointerId) return;
     drag.current = null;
     e.target?.releasePointerCapture?.(e.pointerId);
-    holds.release(d.id, DRAG);
+    if (d.stretch) {
+      // stretched: it keeps its new shape, and stays where it is
+      const t = d.stretch.now?.elements;
+      if (t) onResize(d.id, t.every((x, i) => Math.abs(x - (i % 4 === 0 ? 1 : 0)) < 1e-4) ? undefined : [...t]);
+      holds.release(d.id, DRAG, true);
+    } else holds.release(d.id, DRAG);
     if (controls) controls.enabled = true;
   };
 
   const make = (e) => {
-    // (an XR pointer's click has no `delta`: reading it throws)
-    if (tool === 'select' || !toolPointer(e) || (!e.internalPointer && (e.delta ?? 0) > CLICK_SLOP) || !e.point) return;
+    // (an XR pointer's click has no `delta`: reading it throws; a trigger resizing an object isn't a click)
+    if (tool === 'select' || !toolPointer(e) || (!e.internalPointer && (e.delta ?? 0) > CLICK_SLOP) || !e.point || holds.resizing) return;
     e.stopPropagation();
-    const half = shapeOf(tool).radius;
     // out from the face clicked, resting on it (a sliver apart, so they don't start overlapping)
     const normal = e.face ? e.face.normal.clone().transformDirection(e.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
+    const shape = shapeOf(tool);
+    const half = Math.abs(normal.y) > 0.7 ? shape.half : shape.radius;
     const at = e.point.clone().addScaledVector(normal, half + 0.005);
     const made = material === 'random' ? randomMaterial().id : material;
-    setBodies((list) => withMade(list, makeBody(tool, made, at.toArray())));
+    // (a liquid or sand: a pour of grains, see Fluids.jsx)
+    setBodies((list) => withMade(list, makeBody(tool, made, at.toArray(), undefined, false, materialById(made).simulation ? { fluid: true } : {})));
   };
 
   const cursor = (value) => (document.body.style.cursor = value);
   const handlers = (id) => ({
     onPointerDown: (e) => {
-      if (tool !== 'select' || !toolPointer(e) || (e.button ?? 0) !== 0 || drag.current) return;
+      // Select's left button, or with any tool the middle one (the mouse's grip)
+      const button = e.button ?? 0;
+      if (!((tool === 'select' && button === 0) || (button === 1 && !e.internalPointer))) return;
+      if (!toolPointer(e) || drag.current || holds.resizing) return;
       e.stopPropagation();
       if (!holds.take(id, DRAG)) return;
       const position = registry.get(id).mesh.current.getWorldPosition(new THREE.Vector3());
-      drag.current = { id, pointerId: e.pointerId, ray: e.ray.clone(), distance: e.distance, offset: position.sub(e.point) };
+      drag.current = { id, pointerId: e.pointerId, ray: e.ray.clone(), distance: e.distance, offset: position.clone().sub(e.point) };
+      if (button === 1 && e.shiftKey) {
+        // Shift: stretching it, not moving it
+        const h = holds.map.get(id);
+        const def = registry.get(id).def;
+        drag.current.stretch = {
+          start: e.point.clone(),
+          center: h.position.clone(),
+          quaternion: h.quaternion.clone(),
+          transform: def.transform ? new THREE.Matrix3().fromArray(def.transform) : new THREE.Matrix3(),
+          now: null,
+        };
+      }
       e.target?.setPointerCapture?.(e.pointerId);
       if (controls) controls.enabled = false;
       cursor('grabbing');
@@ -362,15 +420,18 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   // the motion-sensor view has no AR session: passthrough is the rear camera
   const cameraPassthrough = state.handheld && state.passthrough;
   const [cameraFailed, setCameraFailed] = useState(false);
-  // the skybox is behind the objects: Skybox, or Passthrough before an AR session
-  const showsSky = state.background === 'skybox' || (state.background === 'passthrough' && !inAR && !cameraPassthrough);
   useEffect(() => setCameraFailed(false), [cameraPassthrough]);
+  // Video's costly effects: the looks made again for Refraction and Surface Detail (before the objects render), and how many particles
+  setLookQuality({ refraction: state.refraction, surfaceDetail: state.surfaceDetail });
+  particles.density = state.particles === 'low' ? 0.35 : 1;
   const discCollider = useRef(null);
   const origin = useRef(null);
   const pointed = useMemo(() => new Map(), []);
   const viewScale = () => origin.current?.scale.x ?? 1;
   const holds = useMemo(() => new Holds(registry), [registry]);
-  const [handlers, make] = useTools({ tool: state.tool, material: state.material, registry, holds, setBodies, pointed });
+  // an object resized with both hands keeps its new size (see Grab.jsx)
+  const onResize = (id, transform) => setBodies((list) => list.map((b) => (b.id === id ? { ...b, transform } : b)));
+  const [handlers, make] = useTools({ tool: state.tool, material: state.material, registry, holds, setBodies, pointed, onResize });
   const menuPanel = useRef(null);
   const viewPanel = useRef(null);
   const toolsPanel = useRef(null);
@@ -400,29 +461,23 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
           }
         />
       )}
-      {showsSky ? (
-        <AssetBoundary fallback={<Environment reflections={state.reflections} />}>
-          <Suspense fallback={null}>
-            <SkyEnvironment reflections={state.reflections} />
-          </Suspense>
-        </AssetBoundary>
-      ) : (
-        <Environment reflections={state.reflections} />
-      )}
-      <Lights />
+      <Environment reflections={state.reflections} />
+      <Lights shadows={state.shadows} />
       <Physics gravity={state.gravity ? GRAVITY : NO_GRAVITY} paused={state.paused}>
         <WakeOnGravity gravity={state.gravity} />
         <Disc onClick={make} colliderRef={discCollider} />
         <SandboxBodies bodies={bodies} setBodies={setBodies} registry={registry} holds={holds} handlers={handlers} />
         <AirDrag registry={registry} />
-        <ContactSounds registry={registry} disc={discCollider} />
+        <ContactSounds registry={registry} disc={discCollider} holds={holds} />
+        <Fluids bodies={bodies} setBodies={setBodies} onClick={make} smooth={state.liquidSurfaces} />
       </Physics>
       <Particles registry={registry} />
-      <GlowLights registry={registry} />
+      {state.glowLights && <GlowLights registry={registry} />}
       <MaterialLabels registry={registry} holds={holds} pointed={pointed} viewScale={viewScale} />
       <Player
         origin={origin}
         onScale={onScale}
+        onResize={onResize}
         resetScale={resetScale}
         panels={panelRefs}
         registry={registry}
@@ -440,7 +495,8 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
         <CardboardRig split={state.stereo} />
       ) : (
         <IfInSessionMode deny={['immersive-vr', 'immersive-ar']}>
-          <OrbitControls makeDefault target={LOOK_AT} enableDamping minDistance={0.3} maxDistance={20} />
+          {/* (the middle button grabs objects, so it doesn't dolly: the wheel does) */}
+          <OrbitControls makeDefault target={LOOK_AT} enableDamping minDistance={0.3} maxDistance={20} mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN }} />
         </IfInSessionMode>
       )}
     </>

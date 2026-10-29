@@ -102,6 +102,7 @@ button:hover { background: rgba(255, 255, 255, 0.16); }
 .menu-btn .value { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; }
 /* a slider: its label, then the track beside it, or beneath when there is no room */
 .menu-slider { flex-wrap: wrap; row-gap: 4px; cursor: default; }
+.menu-slider .label { flex: none; } /* (whole: the track takes what room is left, or goes beneath) */
 .menu-slider input[type="range"] { flex: 1 1 120px; min-width: 100px; margin: 0; accent-color: #e8ecf6; cursor: pointer; }
 
 /* a group's settings beneath its button, indented like a dropdown's choices */

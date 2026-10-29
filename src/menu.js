@@ -143,6 +143,11 @@ export function splitLabel(label) {
 
 export const PICK_PREFIX = 'pick:';
 
+/** Accessibility → Volume: the sounds, 0 (off) to 100% (as grid-game-threejs's Sounds). */
+export const VOLUME = Object.freeze({ min: 0, max: 1, step: 0.1, default: 1 });
+/** Accessibility → Vibration: every buzz's strength, 0 (off) to 200% (above 100%: stronger, up to the controller's most; as in grid-game-threejs). */
+export const VIBRATION = Object.freeze({ min: 0, max: 2, step: 0.1, default: 1 });
+
 /** Accessibility → Text Size: a multiplier on the panels' text and icons, 75% to 200% (as in grid-game-threejs). */
 export const TEXT_SIZE = Object.freeze({ min: 0.75, max: 2, step: 0.25, default: 1 });
 
@@ -211,10 +216,10 @@ export function menuItems(state, env) {
     group: { open: state.groups.includes(id), items: ids.map((setting) => settings[setting]) },
   });
   return [
-    group('file', 'File', 'file', ['save', 'open']),
-    group('physics', 'Physics', 'gravity', ['gravity', 'simulation', 'sound', 'reset']),
-    group('video', 'Video', 'video', ['background', 'view', 'reflections', 'vsync', 'xrResolution']),
-    group('accessibility', 'Accessibility', 'accessibility', ['textSize', 'controllerGuide']),
+    group('file', 'File', 'file', ['new', 'save', 'open']),
+    group('physics', 'Physics', 'gravity', ['gravity', 'simulation', 'reset']),
+    group('video', 'Video', 'video', ['background', 'view', 'reflections', 'refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'particles', 'vsync', 'xrResolution']),
+    group('accessibility', 'Accessibility', 'accessibility', ['volume', 'vibration', 'textSize', 'controllerGuide']),
   ];
 }
 
@@ -264,13 +269,22 @@ function settingsById(state, env) {
     },
     { id: 'gravity', label: `Gravity: ${state.gravity ? 'On' : 'Off'}`, icon: state.gravity ? 'gravity' : 'gravityOff', title: 'Off: objects float where they are let go' },
     { id: 'simulation', label: `Simulation: ${state.paused ? 'Paused' : 'Running'}`, icon: state.paused ? 'pause' : 'play' },
+    { id: 'new', label: 'New Scene', icon: 'newScene', title: 'Clear the disc: every object gone (Physics → Reset Objects brings back the ten cubes)' },
     { id: 'save', label: 'Save Scene (.glb)', icon: 'save', title: 'Download the scene as glTF, which Blender imports (File → Import → glTF 2.0)' },
     { id: 'open', label: 'Open Scene (.glb)', icon: 'open', title: 'Load a scene saved here, or one from Blender that kept its custom properties' },
     {
-      id: 'sound',
-      label: `Sound: ${state.sound ? 'On' : 'Off'}`,
-      icon: state.sound ? 'soundOn' : 'soundOff',
-      title: 'Objects striking and sliding on each other, sounding like what they are made of',
+      id: 'volume',
+      label: `Volume: ${state.volume > 0 ? percent(state.volume) : 'Off'}`,
+      icon: state.volume > 0 ? 'soundOn' : 'soundOff',
+      slider: { ...VOLUME, value: state.volume },
+      title: 'Objects striking and sliding on each other, sounding like what they are made of (M: mute)',
+    },
+    {
+      id: 'vibration',
+      label: `Vibration: ${state.vibration > 0 ? percent(state.vibration) : 'Off'}`,
+      icon: state.vibration > 0 ? 'vibrationOn' : 'vibrationOff',
+      slider: { ...VIBRATION, value: state.vibration },
+      title: "The controllers' buzz: touching, picking up and striking things (above 100%: stronger)",
     },
     { id: 'reset', label: 'Reset Objects', icon: 'rotate', title: 'The ten starting cubes dropped onto the disc again; the objects made are cleared' },
     {
@@ -278,6 +292,43 @@ function settingsById(state, env) {
       label: `Reflections: ${state.reflections ? 'On' : 'Off'}`,
       icon: state.reflections ? 'reflectionsOn' : 'reflectionsOff',
       title: 'On: objects mirror their surroundings, metals most. Off: lit by the lights alone (faster)',
+    },
+    // the effects that cost the most, each to be turned down where frames run short (in XR most of all)
+    {
+      id: 'refraction',
+      label: `Refraction: ${state.refraction ? 'On' : 'Off'}`,
+      icon: state.refraction ? 'refractionOn' : 'refractionOff',
+      title: 'On: glass, water, ice and the like bend what is seen through them, by their index of refraction. Off: plainly see-through (faster)',
+    },
+    {
+      id: 'shadows',
+      label: `Shadows: ${state.shadows ? 'On' : 'Off'}`,
+      icon: state.shadows ? 'shadowsOn' : 'shadowsOff',
+      title: "The sun's shadows (faster off)",
+    },
+    {
+      id: 'glowLights',
+      label: `Glow Lights: ${state.glowLights ? 'On' : 'Off'}`,
+      icon: state.glowLights ? 'glowOn' : 'glowOff',
+      title: 'Glowing things (lava, fire, kryptonite...) light what is around them. Off: they still glow (faster)',
+    },
+    {
+      id: 'surfaceDetail',
+      label: `Surface Detail: ${state.surfaceDetail ? 'On' : 'Off'}`,
+      icon: state.surfaceDetail ? 'detailOn' : 'detailOff',
+      title: "The materials' bumps and patches of shine (grain, hammering, cracks...). Off: smooth (faster)",
+    },
+    {
+      id: 'liquidSurfaces',
+      label: `Liquid Surfaces: ${state.liquidSurfaces ? 'Smooth' : 'Droplets'}`,
+      icon: state.liquidSurfaces ? 'liquidOn' : 'liquidOff',
+      title: 'Smooth: a liquid drawn as one surface round its droplets (metaballs). Droplets: each drawn as a drop (faster)',
+    },
+    {
+      id: 'particles',
+      label: `Particles: ${state.particles === 'low' ? 'Low' : 'High'}`,
+      icon: state.particles === 'low' ? 'particlesLow' : 'particlesHigh',
+      title: 'How much smoke, steam, fire, fog, sparks and dust (Low: about a third)',
     },
     {
       id: 'vsync',
@@ -329,10 +380,12 @@ export function possibleLabels(env) {
   for (const flag of [false, true])
     for (const background of backgrounds)
       for (const view of env.views)
-        for (const item of Object.values(settingsById({ gravity: flag, paused: flag, sound: flag, reflections: flag, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
+        for (const item of Object.values(settingsById({ gravity: flag, paused: flag, reflections: flag, refraction: flag, shadows: flag, glowLights: flag, surfaceDetail: flag, liquidSurfaces: flag, particles: flag ? 'high' : 'low', volume: 1, vibration: 1, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
           labels.add(item.label);
   // the sliders' widest values, and Controller Guide both ways
   labels.add(`Text Size: ${percent(TEXT_SIZE.max)}`);
+  labels.add(`Volume: ${percent(VOLUME.max)}`);
+  labels.add(`Vibration: ${percent(VIBRATION.max)}`);
   labels.add(`XR Resolution: ${percent(XR_RESOLUTION.max)} (on release)`);
   for (const flag of [false, true]) {
     labels.add(`Controller Guide: ${flag ? 'On' : 'Off'}`);

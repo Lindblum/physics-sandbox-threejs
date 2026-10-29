@@ -11,7 +11,9 @@ import * as THREE from 'three';
  * size: [at birth, at death] m; speed: m/s outward at birth; rise: m/s² up
  * (hot gas) and gravity: share of g down; drag: per second; colors: over its
  * life (or 'material' / 'emissive': the object's own); alpha: at its densest;
- * glow: added onto the scene.
+ * glow: added onto the scene; floor: they lie on the disc (FLOOR) rather than
+ * sink through it; flat: they set off sideways; wander: m/s² of random
+ * buffeting (eddies in the air).
  */
 const PRESETS = {
   smoke: { rate: 25, life: [1.8, 3], size: [0.04, 0.18], speed: 0.04, rise: 0.25, drag: 1.5, colors: ['#8a8a8e', '#4e4e54'], alpha: 0.4, glow: false },
@@ -20,11 +22,18 @@ const PRESETS = {
   sparks: { rate: 5, life: [0.5, 1.1], size: [0.01, 0.003], speed: 0.6, gravity: 1, drag: 0.5, colors: ['#ffe08a', '#ff4a00'], alpha: 1, glow: true },
   motes: { rate: 8, life: [1, 2.2], size: [0.012, 0], speed: 0.06, rise: 0.02, drag: 1, colors: ['emissive'], alpha: 0.9, glow: true },
   dust: { rate: 0, life: [0.6, 1.3], size: [0.008, 0.035], speed: 0.45, gravity: 0.25, drag: 3, colors: ['material'], alpha: 0.55, glow: false },
+  // heavy fog: sinks, and spreads out over the floor (the disc) rather than through it
+  fog: { rate: 18, life: [3, 5], size: [0.06, 0.3], speed: 0.12, gravity: 0.03, drag: 0.8, colors: ['#eef2f5', '#dfe6ea'], alpha: 0.22, glow: false, floor: true, flat: true },
+  // haze: soft, faint puffs hanging in the air, drifting
+  haze: { rate: 14, life: [4, 7], size: [0.08, 0.2], speed: 0.03, drag: 1, wander: 0.05, colors: ['#e4e8ec', '#d4dadf'], alpha: 0.09, glow: false },
+  // dander: tiny flakes fluttering, slowly settling on the floor
+  dander: { rate: 25, life: [5, 9], size: [0.004, 0.004], speed: 0.04, gravity: 0.004, drag: 2, wander: 0.4, colors: ['material'], alpha: 0.9, glow: false, floor: true },
   splash: { rate: 0, life: [0.35, 0.8], size: [0.01, 0.004], speed: 0.9, gravity: 1, drag: 0.3, colors: ['material'], alpha: 0.85, glow: false },
 };
 
 const MAX = 3000; // particles per batch
 const G = 9.81;
+const FLOOR = { y: 0, radius: 1 }; // the disc's top, for particles that lie on it
 
 const VERTEX = /* glsl */ `
   attribute float size;
@@ -118,13 +127,19 @@ class Batch {
         this.props[i] = this.props[j];
         continue;
       }
-      const { rise, gravity, drag, alpha } = this.props[i];
+      const { rise, gravity, drag, alpha, floor, wander } = this.props[i];
       const k = Math.exp(-drag * dt);
       const v = this.vel;
+      if (wander) for (let a = 0; a < 3; a++) v[i * 3 + a] += (Math.random() - 0.5) * 2 * wander * dt;
       v[i * 3] *= k;
       v[i * 3 + 1] = v[i * 3 + 1] * k + (rise - gravity * G) * dt;
       v[i * 3 + 2] *= k;
       for (let a = 0; a < 3; a++) this.pos[i * 3 + a] += v[i * 3 + a] * dt;
+      if (floor && this.pos[i * 3 + 1] < FLOOR.y + 0.01 && Math.hypot(this.pos[i * 3], this.pos[i * 3 + 2]) < FLOOR.radius) {
+        // on the floor: it stops sinking and drifts on outward
+        this.pos[i * 3 + 1] = FLOOR.y + 0.01;
+        v[i * 3 + 1] = Math.max(0, v[i * 3 + 1]);
+      }
       const t = this.age[i] / this.life[i];
       this.position.array.set(this.pos.subarray(i * 3, i * 3 + 3), i * 3);
       this.size.array[i] = this.sizes[i * 2] + (this.sizes[i * 2 + 1] - this.sizes[i * 2]) * t;
@@ -169,6 +184,7 @@ export class ParticleSystem {
     this.glow = new Batch(true);
     this.plain = new Batch(false);
     this.owed = new Map(); // emitter key -> particles owed (fractional)
+    this.density = 1; // Video → Particles: High 1, Low about a third
   }
 
   get objects() {
@@ -180,9 +196,10 @@ export class ParticleSystem {
     const preset = PRESETS[p];
     if (!preset) return;
     _dir.randomDirection();
-    if (preset.gravity) _dir.y = Math.abs(_dir.y) * 0.8 + 0.2; // (sprays up and out)
+    if (preset.flat) _dir.y *= 0.2;
+    else if (preset.gravity) _dir.y = Math.abs(_dir.y) * 0.8 + 0.2; // (sprays up and out)
     const s = preset.speed * speed * rand(0.4, 1);
-    const props = { rise: preset.rise ?? 0, gravity: preset.gravity ?? 0, drag: preset.drag ?? 0, alpha: preset.alpha };
+    const props = { rise: preset.rise ?? 0, gravity: preset.gravity ?? 0, drag: preset.drag ?? 0, alpha: preset.alpha, floor: Boolean(preset.floor), wander: preset.wander ?? 0 };
     (preset.glow ? this.glow : this.plain).add([at.x, at.y, at.z], [_dir.x * s, _dir.y * s, _dir.z * s], rand(...preset.life), preset.size, presetColors(preset, material), props);
   }
 
@@ -195,7 +212,7 @@ export class ParticleSystem {
     const { preset: name, rate } = material.particles;
     const preset = PRESETS[name];
     if (!preset) return;
-    let owed = (this.owed.get(key) ?? 0) + preset.rate * rate * scale * dt;
+    let owed = (this.owed.get(key) ?? 0) + preset.rate * rate * scale * this.density * dt;
     const at = new THREE.Vector3();
     while (owed >= 1) {
       owed -= 1;
@@ -209,7 +226,7 @@ export class ParticleSystem {
   burst(material, at, speed) {
     const name = material.impactParticles;
     if (!name || speed < 0.4) return;
-    const count = Math.min(40, Math.round(speed * 10));
+    const count = Math.min(40, Math.round(speed * 10 * this.density));
     for (let i = 0; i < count; i++) this.spawn(name, material, at, Math.min(2, 0.5 + speed * 0.3));
   }
 

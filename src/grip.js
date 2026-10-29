@@ -3,11 +3,25 @@ import * as THREE from 'three';
 // Touch controllers read straight from the XR session, for the grip controls
 // (see Grab.jsx), so they work at any distance.
 
-const SQUEEZE = 1; // xr-standard gamepad button index
+const TRIGGER = 0; // xr-standard gamepad button indices
+const SQUEEZE = 1;
 const STICK_DEAD = 0.2; // thumbstick tilt ignored below this
 
-/** A haptic pulse on `gamepad`'s controller, `intensity` (0 to 1) for `ms`. */
+let vibration = 1; // Options → Accessibility → Vibration: every pulse's strength times this (0: off; up to 2)
+export function setVibration(v) {
+  vibration = v;
+}
+
+/** Each hand's gamepad, as last read (see readControllers), for pulses from elsewhere (things held striking others). */
+const gamepads = {};
+
+/** A haptic pulse on `hand`'s controller ('left' / 'right'), as `pulse`. */
+export const pulseHand = (hand, intensity, ms) => pulse(gamepads[hand], intensity, ms);
+
+/** A haptic pulse on `gamepad`'s controller, `intensity` (0 to 1, × Vibration, at most the controller's strongest) for `ms`. */
 export function pulse(gamepad, intensity, ms) {
+  intensity = Math.min(1, intensity * vibration);
+  if (intensity <= 0) return;
   const actuator = gamepad?.hapticActuators?.[0];
   if (actuator?.pulse) actuator.pulse(intensity, ms)?.catch?.(() => {});
   else gamepad?.vibrationActuator?.playEffect?.('dual-rumble', { duration: ms, strongMagnitude: intensity })?.catch?.(() => {});
@@ -15,12 +29,13 @@ export function pulse(gamepad, intensity, ms) {
 
 /**
  * Each controller's state in world space: { grip (Matrix4), position, ray,
- * rayMatrix (its pointing frame: -Z along the ray), squeeze, stick ({ x:
+ * rayMatrix (its pointing frame: -Z along the ray), squeeze, trigger, stick ({ x:
  * right, y: down }, 0 inside the dead zone), gamepad }, keyed by hand. Poses come relative to the XR origin,
  * which locomotion moves, so they're carried through its world matrix.
  */
 export function readControllers(frame, referenceSpace, origin) {
   const hands = {};
+  gamepads.left = gamepads.right = null;
   for (const source of frame.session.inputSources) {
     if (!source.gripSpace || !source.gamepad) continue; // tracked hands have no grip button
     if (source.handedness !== 'left' && source.handedness !== 'right') continue;
@@ -48,8 +63,10 @@ export function readControllers(frame, referenceSpace, origin) {
       rayMatrix,
       stick: { x: axis(0), y: axis(1) },
       squeeze: Boolean(source.gamepad.buttons[SQUEEZE]?.pressed),
+      trigger: Boolean(source.gamepad.buttons[TRIGGER]?.pressed),
       gamepad: source.gamepad,
     };
+    gamepads[source.handedness] = source.gamepad;
   }
   return hands;
 }

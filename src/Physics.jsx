@@ -7,12 +7,15 @@ import {
   CuboidCollider,
   CylinderCollider,
   RigidBody,
+  interactionGroups,
   useAfterPhysicsStep,
   useBeforePhysicsStep,
+  useRapier,
 } from '@react-three/rapier';
 import * as THREE from 'three';
 import { AIR_DENSITY, DISC_MATERIAL, STARTING_MATERIALS, materialById } from './materials.js';
-import { CUBE_SIZE, SPHERE_RADIUS, shapeOf } from './shapes.js';
+import { CUBE_SIZE, CYLINDER, SPHERE_RADIUS, shapeOf, transformedShape } from './shapes.js';
+import { pulseHand } from './grip.js';
 import { materialMaps } from './textures.js';
 import { ParticleSystem } from './particles.js';
 import { impact, scrape, setListener, updateSounds } from './sound.js';
@@ -51,13 +54,20 @@ const VARIANTS = 6; // looks per material, a little apart by its colour_variance
 
 const DYNAMIC = 0; // Rapier's RigidBodyType
 const KINEMATIC = 2; // (KinematicPositionBased)
+/**
+ * Who bumps into whom: the disc, the objects (and grains), and things that
+ * touch only the floor (heavy fog), which pass through the objects.
+ */
+export const GROUPS = { disc: interactionGroups([0]), object: interactionGroups([1]), floorOnly: interactionGroups([2], [0]) };
 const COMBINE = { average: CoefficientCombineRule.Average, max: CoefficientCombineRule.Max, min: CoefficientCombineRule.Min, multiply: CoefficientCombineRule.Multiply };
 
 let nextId = 1;
 
 /**
  * A new object: { id, shape (see shapes.js), material (id), position,
- * rotation (Euler XYZ), start (one of the first ten), linvel?, angvel? }.
+ * rotation (Euler XYZ), start (one of the first ten), linvel?, angvel?,
+ * transform? (a 3×3 matrix, column-major, on the shape's own space: it's been
+ * resized or stretched, see Grab.jsx) }.
  */
 export function makeBody(shape, material, position, rotation = [0, Math.random() * Math.PI * 2, 0], start = false, motion = {}) {
   return { id: nextId++, shape, material, position, rotation, start, ...motion };
@@ -102,14 +112,32 @@ const jitter = (a, b) => {
 };
 const _hsl = { h: 0, s: 0, l: 0 };
 
+/** Video's settings the looks follow: Refraction, Surface Detail (see setLookQuality). */
+const lookQuality = { refraction: true, surfaceDetail: true };
+const LOOKS = new Map();
+const lookListeners = new Set();
+
+/**
+ * Video → Refraction and Surface Detail changed: every look is made again
+ * (call while rendering, before the objects are; `onLooksChanged` hears it).
+ */
+export function setLookQuality({ refraction, surfaceDetail }) {
+  if (refraction === lookQuality.refraction && surfaceDetail === lookQuality.surfaceDetail) return;
+  Object.assign(lookQuality, { refraction, surfaceDetail });
+  for (const look of LOOKS.values()) look.dispose();
+  LOOKS.clear();
+  for (const f of lookListeners) f();
+}
+export const onLooksChanged = (f) => lookListeners.add(f);
+
 /**
  * A material's look as a three.js material: its colour (look `variant` of
- * VARIANTS, apart by its colour_variance), surface pattern, shine and glow.
- * `transmission`: see-through as glass is, refracting by its ior (for the
- * exported scene; on screen the table's opacity stands in for it, being far
- * cheaper, in XR most of all).
+ * VARIANTS, apart by its colour_variance), surface pattern (its bumps and
+ * shine with Surface Detail), shine and glow. `transmission`: see-through as
+ * glass is, refracting by its ior (Video → Refraction; always in the exported
+ * scene); without it the table's opacity stands in (far cheaper).
  */
-export function lookMaterial(material, { variant = 0, transmission = false } = {}) {
+export function lookMaterial(material, { variant = 0, transmission = lookQuality.refraction, detail = lookQuality.surfaceDetail } = {}) {
   const l = material.look;
   const transparent = l.opacity < 1;
   const look = new THREE.MeshPhysicalMaterial({
@@ -137,24 +165,26 @@ export function lookMaterial(material, { variant = 0, transmission = false } = {
   if (maps) {
     look.map = maps.map;
     look.color.multiplyScalar(1 / maps.mean); // (the pattern darkens on average: kept true to the table's colour)
-    if (l.normalStrength) {
+    if (l.normalStrength && detail) {
       look.normalMap = maps.normalMap;
       look.normalScale.setScalar(l.normalStrength);
     }
-    if (l.roughnessVariance) look.roughnessMap = maps.roughnessMap;
+    if (l.roughnessVariance && detail) look.roughnessMap = maps.roughnessMap;
   }
   if (l.emissive) {
     look.emissive.set(l.emissive);
     look.emissiveIntensity = l.emissiveIntensity;
     if (maps?.emissiveMap) look.emissiveMap = maps.emissiveMap;
   }
-  if (transmission && l.transmission > 0) look.transmission = l.transmission;
+  if (transmission && l.transmission > 0) {
+    // (thick enough to bend what's behind it, as a 10 cm object does)
+    Object.assign(look, { transmission: l.transmission, thickness: 0.05 });
+  }
   else if (transparent) Object.assign(look, { transparent, opacity: l.opacity, depthWrite: false });
   return look;
 }
 
-const LOOKS = new Map();
-function lookOf(material, variant = 0) {
+export function lookOf(material, variant = 0) {
   const key = `${material.id}:${variant}`;
   if (!LOOKS.has(key)) LOOKS.set(key, lookMaterial(material, { variant }));
   return LOOKS.get(key);
@@ -165,12 +195,21 @@ function lookOf(material, variant = 0) {
  * Each frame the held ones are moved where they were last put (kinematically),
  * and their velocity and spin are followed, so letting go throws them.
  * `registry`: id -> { body (ref to the Rapier body), collider (ref: the first
- * collider), mesh (ref), def, material, shape, jiggle }.
+ * collider), mesh (ref), def, material, shape, measure ({ size, radius, half,
+ * volume }: as resized), base (Matrix4: the mesh's, its resizing), preview
+ * (Matrix4 or null: resizing it now, see Grab.jsx), jiggle }.
  */
 export class Holds {
   constructor(registry) {
     this.registry = registry;
     this.map = new Map(); // id -> { by, position, quaternion, last?, velocity, spin }
+  }
+
+  /** The hands holding `id` (both while it's being resized). */
+  handsOf(id) {
+    const h = this.map.get(id);
+    if (!h) return [];
+    return h.hands ?? (h.by === 'left' || h.by === 'right' ? [h.by] : []);
   }
 
   /** Whether `id` is held (by anyone, or by `by`). */
@@ -256,7 +295,7 @@ const _qi = new THREE.Quaternion();
 export function Disc({ onClick, colliderRef }) {
   return (
     <RigidBody type="fixed" colliders={false} position={[0, -DISC.thickness / 2, 0]}>
-      <CylinderCollider ref={colliderRef} args={[DISC.thickness / 2, DISC.radius]} friction={1} restitution={0.3} />
+      <CylinderCollider ref={colliderRef} args={[DISC.thickness / 2, DISC.radius]} friction={1} restitution={0.3} collisionGroups={GROUPS.disc} />
       <mesh receiveShadow onClick={onClick} material={lookOf(DISC_MATERIAL)}>
         <cylinderGeometry args={[DISC.radius, DISC.radius, DISC.thickness, 96]} />
       </mesh>
@@ -264,11 +303,28 @@ export function Disc({ onClick, colliderRef }) {
   );
 }
 
-/** A shape's collider(s), with `surface`'s friction, bounce and density (`ref`: the first). */
-function Colliders({ shape, surface }) {
+/** A shape's collider(s), resized by `transform` if it has one, with `surface`'s friction, bounce and density (`ref`: the first). */
+function Colliders({ shape, transform, surface }) {
+  const hulls = (pieces) => pieces.map((points, i) => <ConvexHullCollider key={i} args={[points]} {...surface} ref={i === 0 ? surface.ref : undefined} />);
+  if (transform) return hulls(transformedShape(shape.id, transform).pieces);
   if (shape.id === 'cube') return <CuboidCollider args={[CUBE_SIZE / 2, CUBE_SIZE / 2, CUBE_SIZE / 2]} {...surface} />;
   if (shape.id === 'sphere') return <BallCollider args={[SPHERE_RADIUS]} {...surface} />;
-  return shape.pieces.map((points, i) => <ConvexHullCollider key={i} args={[points]} {...surface} ref={i === 0 ? surface.ref : undefined} />);
+  if (shape.id === 'cylinder') return <CylinderCollider args={[CYLINDER.height / 2, CYLINDER.radius]} {...surface} />;
+  return hulls(shape.pieces);
+}
+
+/** A shape's measures as resized by `transform` (or not): { size, radius, half, volume }. */
+function measureOf(shape, transform) {
+  if (!transform) return { size: shape.size, radius: shape.radius, half: shape.half, volume: shape.volume };
+  const t = transformedShape(shape.id, transform);
+  return { size: t.size, radius: t.radius, half: t.half, volume: t.volume };
+}
+
+/** A resizing's 3×3 as the mesh's matrix. */
+export function transformMatrix(transform) {
+  const m = new THREE.Matrix4();
+  if (transform) m.setFromMatrix3(new THREE.Matrix3().fromArray(transform));
+  return m;
 }
 
 /**
@@ -281,13 +337,14 @@ function SandboxBody({ def, registry, handlers }) {
   const mesh = useRef(null);
   const material = materialById(def.material);
   const shape = shapeOf(def.shape);
+  const base = useMemo(() => transformMatrix(def.transform), [def.transform]);
   useEffect(() => {
-    registry.set(def.id, { body, collider, mesh, def, material, shape, jiggle: null });
+    registry.set(def.id, { body, collider, mesh, def, material, shape, measure: measureOf(shape, def.transform), base, preview: null, jiggle: null });
     return () => {
       registry.delete(def.id);
       particles.forget(def.id);
     };
-  }, [registry, def, material, shape]);
+  }, [registry, def, material, shape, base]);
   const surface = {
     ref: collider,
     friction: material.friction,
@@ -295,7 +352,8 @@ function SandboxBody({ def, registry, handlers }) {
     frictionCombineRule: CoefficientCombineRule.Min,
     restitutionCombineRule: COMBINE[material.restitutionCombine] ?? CoefficientCombineRule.Average,
     density: material.density,
-    sensor: !material.solid, // (a gas or plasma passes through things)
+    sensor: material.collides === 'none', // (a gas or plasma passes through things)
+    collisionGroups: material.collides === 'floor' ? GROUPS.floorOnly : GROUPS.object, // (heavy fog: the floor only)
   };
   return (
     <RigidBody
@@ -312,9 +370,11 @@ function SandboxBody({ def, registry, handlers }) {
       angularDamping={material.damping}
       canSleep
     >
-      <Colliders shape={shape} surface={surface} />
+      <Colliders shape={shape} transform={def.transform} surface={surface} />
       <mesh
         ref={mesh}
+        matrixAutoUpdate={false}
+        matrix={base}
         geometry={shape.geometry}
         material={lookOf(material, def.id % VARIANTS)}
         castShadow={material.look.opacity > 0.3}
@@ -330,6 +390,7 @@ function SandboxBody({ def, registry, handlers }) {
 const JIGGLE_RATE = 28; // rad/s
 const JIGGLE_FADE = 0.35; // s to fade by e
 const _up = new THREE.Vector3();
+const _jig = new THREE.Matrix4();
 
 /** Starts `entry`'s wobble, as hard as a strike of `speed` m/s. */
 function jiggle(entry, speed) {
@@ -351,45 +412,50 @@ export function SandboxBodies({ bodies, setBodies, registry, holds, handlers }) 
       const b = entry.body.current;
       const y = b?.translation().y;
       if (y < FALLEN_Y || y > FLOWN_Y) (fallen ??= new Set()).add(id);
-      const j = entry.jiggle;
+      // the mesh: as resized (or being resized), and wobbling
       const m = entry.mesh.current;
-      if (j && m) {
+      if (!m) continue;
+      const j = entry.jiggle;
+      _jig.identity();
+      if (j) {
         j.t += dt;
         const a = j.amount * Math.exp(-j.t / JIGGLE_FADE) * Math.sin(j.t * JIGGLE_RATE);
-        if (j.t > JIGGLE_FADE * 5) {
-          entry.jiggle = null;
-          m.scale.setScalar(1);
-        } else {
+        if (j.t > JIGGLE_FADE * 5) entry.jiggle = null;
+        else {
           // squashed along the world's up, in the object's own axes: the nearest of them
-          _up.set(0, 1, 0).applyQuaternion(m.getWorldQuaternion(_dq).invert());
+          _up.set(0, 1, 0).applyQuaternion(b ? _dq.copy(b.rotation()).invert() : _dq.identity());
           const ax = Math.abs(_up.x);
           const ay = Math.abs(_up.y);
           const az = Math.abs(_up.z);
           const s = 1 - a;
           const w = 1 + a / 2;
-          m.scale.set(ax >= ay && ax >= az ? s : w, ay > ax && ay >= az ? s : w, az > ax && az > ay ? s : w);
+          _jig.makeScale(ax >= ay && ax >= az ? s : w, ay > ax && ay >= az ? s : w, az > ax && az > ay ? s : w);
         }
       }
+      m.matrix.multiplyMatrices(entry.preview ?? entry.base, _jig);
+      m.matrixWorldNeedsUpdate = true;
     }
     if (!fallen) return;
     for (const id of fallen) registry.delete(id); // (not again next frame, before React catches up)
     setBodies((list) => list.flatMap((b) => (!fallen.has(b.id) ? [b] : b.start ? [respawned(b)] : [])));
   });
-  return bodies.map((def) => <SandboxBody key={def.id} def={def} registry={registry} handlers={handlers} />);
+  // (the grains of a liquid or sand are Fluids.jsx's)
+  return bodies.map((def) => !def.fluid && <SandboxBody key={def.id} def={def} registry={registry} handlers={handlers} />);
 }
 
 /** Before each step: the air drags on each moving object (½ ρ C A v², against its motion). */
 export function AirDrag({ registry }) {
   useBeforePhysicsStep((world) => {
     const dt = world.timestep;
-    for (const { body, shape } of registry.values()) {
+    for (const { body, shape, measure } of registry.values()) {
       const b = body.current;
       if (!b || !b.isDynamic() || b.isSleeping()) continue;
       const v = b.linvel();
       const speed = Math.hypot(v.x, v.y, v.z);
       if (speed < 0.05) continue;
+      const area = shape.area * (measure.size / shape.size) ** 2;
       // (never more than stops it)
-      const impulse = Math.min(0.5 * AIR_DENSITY * shape.drag * shape.area * speed * speed * dt, b.mass() * speed * 0.9);
+      const impulse = Math.min(0.5 * AIR_DENSITY * shape.drag * area * speed * speed * dt, b.mass() * speed * 0.9);
       const k = -impulse / speed;
       b.applyImpulse({ x: v.x * k, y: v.y * k, z: v.z * k }, false);
     }
@@ -415,7 +481,7 @@ export function Particles({ registry }) {
       const b = e.body.current;
       if (!e.material.particles || !b) continue;
       _v.copy(b.translation());
-      particles.emit(e.def.id, e.material, _v, e.shape.radius * 0.6, dt, (e.shape.size / CUBE_SIZE) ** 2);
+      particles.emit(e.def.id, e.material, _v, e.measure.radius * 0.6, dt, (e.measure.size / CUBE_SIZE) ** 2);
     }
     // the eye's viewport height, for the particles' size on screen
     const eye = gl.xr.isPresenting ? gl.xr.getCamera().cameras[0]?.viewport : null;
@@ -440,7 +506,7 @@ export function GlowLights({ registry }) {
     lights.current.forEach((light, i) => {
       if (!light) return;
       const g = glowing[i]?.e;
-      light.intensity = g ? g.material.light * (g.shape.size / CUBE_SIZE) ** 2 : 0;
+      light.intensity = g ? g.material.light * (g.measure.size / CUBE_SIZE) ** 2 : 0;
       if (!g) return;
       light.position.copy(g.body.current.translation());
       light.color.set(g.material.look.emissive ?? g.material.look.color);
@@ -473,25 +539,63 @@ function pointVelocity(b, p, out) {
   return out.set(v.x, v.y, v.z).add(_w.set(w.x, w.y, w.z).cross(_r));
 }
 
+const SLIDE_BUZZ_EVERY = 0.06; // s between the buzzes of something held sliding on another
+// glue: a bond where something sticky touches, until it's pulled this far out of place
+const BOND_BREAK_M = 0.01;
+const BOND_BREAK_RAD = 0.35;
+const REBOND_S = 0.6; // s before a pair pulled apart can stick again
+const _p1 = new THREE.Vector3();
+const _p2 = new THREE.Vector3();
+const _qa = new THREE.Quaternion();
+const _qb = new THREE.Quaternion();
+
+/** World point `p` in `body`'s own space. */
+function localPoint(body, p) {
+  _qa.copy(body.rotation()).invert();
+  return _p1.copy(p).sub(body.translation()).applyQuaternion(_qa).clone();
+}
+
 /**
  * After each step: what things touching do (see sound.js, particles.js). Each
  * pair in contact: a sudden rise in the impulse between them is a strike,
- * ringing both, throwing up their impact particles and wobbling the wobbly;
- * while they touch, sliding hisses and a ball rolling rumbles. Each frame the
- * listener follows the viewer. `disc`: ref to the disc's collider.
+ * ringing both, throwing up their impact particles and wobbling the wobbly,
+ * and buzzing the controller holding either, as hard as it struck; while they
+ * touch, sliding hisses (and buzzes softly, held) and a ball rolling rumbles.
+ * Something sticky (glue) bonds to what it touches, the disc too, with a
+ * fixed joint, until pulled out of place (by a hand, say), when it lets go.
+ * Each frame the listener follows the viewer. `disc`: ref to the disc's
+ * collider; `holds`: who holds what (see Holds).
  */
-export function ContactSounds({ registry, disc }) {
-  const pairs = useMemo(() => new Map(), []); // key -> { dv, struck, seen }
+export function ContactSounds({ registry, disc, holds }) {
+  const { world, rapier } = useRapier();
+  const pairs = useMemo(() => new Map(), []); // key -> { dv, struck, seen, unbonded }
+  const bonds = useMemo(() => new Map(), []); // key -> { joint, b1, b2, a1, a2, turn (b1's rotation relative to b2's) }
+  const slideBuzz = useRef({}); // hand -> when it may buzz for sliding again
   const gl = useThree((s) => s.gl);
   useAfterPhysicsStep((world) => {
     const dt = world.timestep;
     const now = performance.now() / 1000;
+    // bonds pulled out of place let go (and ones whose objects went)
+    for (const [key, bond] of bonds) {
+      const gone = !world.bodies.contains(bond.b1.handle) || !world.bodies.contains(bond.b2.handle) || !world.impulseJoints.contains(bond.joint.handle);
+      if (!gone) {
+        _p1.copy(bond.a1).applyQuaternion(_qa.copy(bond.b1.rotation())).add(bond.b1.translation());
+        _p2.copy(bond.a2).applyQuaternion(_qb.copy(bond.b2.rotation())).add(bond.b2.translation());
+        const twist = _qa.copy(bond.b1.rotation()).premultiply(_qb.copy(bond.b2.rotation()).invert()).angleTo(bond.turn);
+        if (_p1.distanceTo(_p2) < BOND_BREAK_M && twist < BOND_BREAK_RAD) continue;
+        world.removeImpulseJoint(bond.joint, true);
+        for (const id of bond.ids) for (const hand of holds.handsOf(id)) pulseHand(hand, 0.5, 40);
+      }
+      bonds.delete(key);
+      const pair = pairs.get(key);
+      if (pair) pair.unbonded = now;
+    }
     const byHandle = new Map();
     for (const e of registry.values()) {
       const b = e.body.current;
       if (!b || !e.material.solid) continue;
       // every collider of it (a stellated shape has several)
-      const info = { key: e.def.id, entry: e, body: b, material: e.material, size: e.shape.size, shape: e.def.shape };
+      const info = { key: e.def.id, entry: e, body: b, material: e.material, size: e.measure.size, shape: e.def.shape };
       for (let i = 0; i < b.numColliders(); i++) {
         const c = b.collider(i);
         byHandle.set(c.handle, { ...info, collider: c });
@@ -544,9 +648,22 @@ export function ContactSounds({ registry, disc }) {
             for (const side of [a, b]) {
               particles.burst(side.material, _a, speed);
               if (side.entry?.material.jiggle) jiggle(side.entry, speed);
+              // held: the hand feels it, harder the harder it struck
+              if (side.body) for (const hand of holds.handsOf(side.key)) pulseHand(hand, Math.min(1, 0.2 + speed * 0.3), Math.min(80, 25 + speed * 20));
             }
           }
           pair.dv = dv;
+          // something sticky touching: they bond where they touch
+          if ((a.material.sticky || b.material.sticky) && !bonds.has(key) && now - (pair.unbonded ?? -Infinity) > REBOND_S) {
+            const b2 = b.body ?? disc.current.parent();
+            if (b2) {
+              const a1 = localPoint(a.body, _a);
+              const a2 = localPoint(b2, _a);
+              const turn = _qa.copy(a.body.rotation()).premultiply(_qb.copy(b2.rotation()).invert()).clone();
+              const joint = world.createImpulseJoint(rapier.JointData.fixed(a1, { x: 0, y: 0, z: 0, w: 1 }, a2, turn), a.body, b2, true);
+              bonds.set(key, { joint, b1: a.body, b2, a1, a2, turn, ids: [a.key, b.key].filter(Boolean) });
+            }
+          }
           // sliding: how fast the surfaces pass each other where they touch
           const n = manifold.normal();
           _n.set(n.x, n.y, n.z);
@@ -555,6 +672,15 @@ export function ContactSounds({ registry, disc }) {
           const spin = (body, shape) => (shape === 'sphere' && body ? _w.copy(body.angvel()).length() * SPHERE_RADIUS : 0);
           const roll = Math.max(spin(a.body, a.shape), spin(b.body, b.shape));
           scrape(key, a.material, b.material, slide, roll, impulse / dt, _a);
+          // held and sliding on something: a soft buzz, stronger the faster
+          if (slide > 0.05)
+            for (const side of [a, b])
+              if (side.body)
+                for (const hand of holds.handsOf(side.key))
+                  if (now >= (slideBuzz.current[hand] ?? 0)) {
+                    pulseHand(hand, Math.min(0.35, 0.08 + slide * 0.15), 40);
+                    slideBuzz.current[hand] = now + SLIDE_BUZZ_EVERY;
+                  }
         });
       });
     }
@@ -635,7 +761,7 @@ export function MaterialLabels({ registry, holds, pointed, viewScale }) {
       // above the object whichever way it's turned (its bounding sphere's top)
       entry.mesh.current.getWorldPosition(_at);
       const h = LABEL_H_M * k;
-      sprite.position.set(_at.x, _at.y + entry.shape.radius + LABEL_GAP_M * k + h / 2, _at.z);
+      sprite.position.set(_at.x, _at.y + entry.measure.radius + LABEL_GAP_M * k + h / 2, _at.z);
       // the same size on screen however far, but never smaller than life size up close
       const far = Math.max(1, camera.getWorldPosition(_v).distanceTo(sprite.position) / (1.2 * k));
       sprite.scale.set(h * aspect * far, h * far, 1);

@@ -19,7 +19,7 @@ const REF_SIZE = 0.1; // m: the size impact_hz is given for
 let ctx = null;
 let master = null;
 let noise = null;
-let on = true;
+let volume = 1; // Options → Accessibility → Volume: 0 (off) to 1
 let impacts = 0;
 const scrapes = new Map(); // key -> voice
 
@@ -35,7 +35,7 @@ export function initSound() {
       compressor.ratio.value = 6;
       compressor.connect(ctx.destination);
       master = ctx.createGain();
-      master.gain.value = on ? 1 : 0;
+      master.gain.value = volume;
       master.connect(compressor);
       // two seconds of white noise, played from random places
       noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
@@ -47,12 +47,12 @@ export function initSound() {
   for (const type of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(type, wake, { capture: true });
 }
 
-const running = () => (ctx?.state === 'running' && on ? ctx : null);
+const running = () => (ctx?.state === 'running' && volume > 0 ? ctx : null);
 
-/** Options → Physics → Sound. */
-export function setSoundOn(value) {
-  on = value;
-  if (master) master.gain.setTargetAtTime(on ? 1 : 0, ctx.currentTime, 0.03);
+/** Options → Accessibility → Volume: 0 (off) to 1. */
+export function setVolume(value) {
+  volume = Math.max(0, Math.min(1, value || 0));
+  if (master) master.gain.setTargetAtTime(volume, ctx.currentTime, 0.03);
 }
 
 /** Where the listener is: the viewer's camera (its world matrix). */
@@ -200,7 +200,7 @@ export function updateSounds() {
   if (!ctx) return;
   const now = ctx.currentTime;
   for (const [key, v] of scrapes) {
-    if (now - v.seen < SCRAPE_HOLD && on) continue;
+    if (now - v.seen < SCRAPE_HOLD && volume > 0) continue;
     scrapes.delete(key);
     v.slide.gain.setTargetAtTime(0, now, 0.03);
     v.roll.gain.setTargetAtTime(0, now, 0.03);

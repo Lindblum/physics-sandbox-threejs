@@ -25,6 +25,14 @@
 //   gravity_scale, damping   overrides: how much gravity pulls it (else 1 less its buoyancy), and
 //                            how quickly it settles (hovering things)
 //   jiggle                   how much it wobbles when struck (a rigid body's looks only)
+//   collides                 what it bumps into: all, floor (only the disc: heavy fog) or none
+//                            (gases and plasmas, unless it says)
+//   sticky                   0 to 1: it glues itself to what it touches, held until pulled
+//                            that much apart (see Glue in Physics.jsx)
+//   simulation, grain_count, sim_cohesion, sim_viscosity   made of many grains, not one solid
+//                            (see Fluids.jsx): liquid (droplets that cling together, by
+//                            sim_cohesion m/s², and drag on each other, by sim_viscosity 0 to 1)
+//                            or granular (sand); about grain_count in a 10 cm cube's worth
 //   particles, particle_rate, impact_particles   the particles it gives off all the time, how many
 //                            (× the preset's), and where struck (see particles.js)
 //   the rest                 for simulations to come (heat, melting, fluids, sound in it)
@@ -65,8 +73,11 @@ const value = (s) => (s.trim() === '' ? null : NUMBER.test(s.trim()) ? Number(s)
 function material(row) {
   const n = (v, fallback) => (typeof v === 'number' ? v : fallback);
   const fill = n(row.fill, 1);
+  const collides = row.collides ?? (row.state !== 'gas' && row.state !== 'plasma' ? 'all' : 'none');
   return {
     id: row.id,
+    /** collides with the objects (gases and plasmas pass through them) */
+    solid: collides === 'all',
     name: row.name,
     state: row.state,
     /** kg/m³ of the object as a whole (a hollow one counts its air as nothing) */
@@ -74,8 +85,13 @@ function material(row) {
     friction: n(row.friction, 0.5),
     restitution: n(row.restitution, 0.3),
     restitutionCombine: row.restitution_combine ?? 'average',
-    /** collides with things (gases and plasmas pass through) */
-    solid: row.state !== 'gas' && row.state !== 'plasma',
+    /** what it bumps into: 'all', 'floor' (the disc only) or 'none' */
+    collides,
+    sticky: n(row.sticky, 0),
+    simulation: row.simulation ?? null,
+    grainCount: n(row.grain_count, 250),
+    cohesion: n(row.sim_cohesion, 0),
+    simViscosity: n(row.sim_viscosity, 0),
     gravityScale: typeof row.gravity_scale === 'number' ? row.gravity_scale : null,
     damping: n(row.damping, 0),
     jiggle: n(row.jiggle, 0),
@@ -136,6 +152,6 @@ export const DISC_MATERIAL = materialById('concrete');
 export const STARTING_MATERIALS = ['wood', 'steel', 'rubber', 'ice', 'glass', 'granite', 'foam', 'aluminium', 'gold', 'plastic'].map(materialById);
 /** A solid or liquid one at random (a gas would float away, a plasma hover). */
 export function randomMaterial() {
-  const pick = MATERIALS.filter((m) => m.solid && m.gravityScale == null);
+  const pick = MATERIALS.filter((m) => m.solid && m.gravityScale == null && !m.simulation);
   return pick[Math.floor(Math.random() * pick.length)];
 }
