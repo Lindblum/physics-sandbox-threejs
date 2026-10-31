@@ -15,6 +15,7 @@ const MAX_IMPACTS = 32; // voices ringing at once (more are dropped)
 const MAX_SCRAPES = 12;
 const SCRAPE_HOLD = 0.12; // s a slide sound lasts without news of it
 const REF_SIZE = 0.1; // m: the size impact_hz is given for
+const SOFT_KNOCK = 0.35; // m/s: a strike this fast sounds half as loud as it would, slower ones much quieter still
 
 let ctx = null;
 let master = null;
@@ -126,7 +127,8 @@ export function impact(material, size, speed, mass, at) {
   const s = material.sound;
   if (!c || impacts >= MAX_IMPACTS || (!s.hz && !s.noise)) return;
   const strength = speed * Math.sqrt(Math.min(mass, 50) / 0.1) * 0.4 * s.gain;
-  const amp = 0.55 * (1 - Math.exp(-strength));
+  // (a light knock, a nudge: much quieter than its speed alone would say)
+  const amp = 0.55 * (1 - Math.exp(-strength)) * (speed * speed) / (speed * speed + SOFT_KNOCK ** 2);
   if (amp < 0.004) return;
   const t = c.currentTime + 0.003;
   const out = panner(at);
@@ -189,7 +191,7 @@ export function scrape(key, a, b, slide, roll, force, at) {
   if (!c) return;
   let v = scrapes.get(key);
   const press = Math.min(1, Math.max(0.08, Math.sqrt(force) / 3));
-  const slideAmp = slide < 0.03 ? 0 : Math.sqrt(a.sound.scrapeGain * b.sound.scrapeGain) * Math.min(1, slide / 0.8) * press * 0.3;
+  const slideAmp = slide < 0.03 ? 0 : Math.sqrt(a.sound.scrapeGain * b.sound.scrapeGain) * Math.min(1, (slide / 0.8) ** 2) * press * 0.3;
   const rollAmp = roll < 0.05 ? 0 : Math.min(1, roll / 1.5) * press * 0.25;
   if (!v) {
     if ((!slideAmp && !rollAmp) || scrapes.size >= MAX_SCRAPES) return;

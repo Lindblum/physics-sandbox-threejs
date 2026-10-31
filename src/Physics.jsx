@@ -496,6 +496,40 @@ export function AirDrag({ registry }) {
   return null;
 }
 
+// below this speed nothing bounces (it settles instead of hopping forever on
+// something bouncy: a block put down on rubber), unless something faster is
+// about to hit it
+export const BOUNCE_MIN = 0.5; // m/s
+const _o = new THREE.Vector3();
+
+/** Before each step: each object's bounce (its colliders' restitution) its material's while it, or something about to hit it, moves fast enough; none while not. */
+export function BounceThreshold({ registry }) {
+  useBeforePhysicsStep(() => {
+    const fast = [];
+    for (const e of registry.values()) {
+      const b = e.body.current;
+      if (!b) continue;
+      const v = b.linvel();
+      e.speed = Math.hypot(v.x, v.y, v.z);
+      if (e.speed >= BOUNCE_MIN) fast.push(e);
+    }
+    for (const e of registry.values()) {
+      const b = e.body.current;
+      if (!b || !e.material.restitution) continue;
+      _o.copy(b.translation());
+      const bouncy =
+        e.speed >= BOUNCE_MIN ||
+        fast.some((f) => f !== e && _o.distanceTo(f.body.current.translation()) < e.measure.radius + f.measure.radius + f.speed * 0.1);
+      const restitution = bouncy ? e.material.restitution : 0;
+      for (let i = 0; i < b.numColliders(); i++) {
+        const c = b.collider(i);
+        if (c.restitution() !== restitution) c.setRestitution(restitution);
+      }
+    }
+  });
+  return null;
+}
+
 /** The scene's particles (see particles.js). */
 export const particles = new ParticleSystem();
 
@@ -552,6 +586,8 @@ export function GlowLights({ registry }) {
 // (as a change of speed, m/s) from the step before; a resting object's
 // steady push against the floor doesn't
 const IMPACT_DV = 0.12;
+const IMPACT_DV_TOUCHING = 0.5; // ...or this much, for a pair touching already (jostling, settling: not a blow)
+const TOUCHING_S = 0.1; // s: a pair seen touching this recently is touching still
 const IMPACT_GAP = 0.05; // s: the soonest a pair strikes again
 const DISC_SIZE = Math.cbrt(Math.PI * DISC.radius ** 2 * DISC.thickness);
 const _a = new THREE.Vector3();
@@ -655,6 +691,34 @@ export function ContactSounds({ registry, disc, holds, onDeform }) {
     const joint = world.createImpulseJoint(rapier.JointData.fixed(a1, { x: 0, y: 0, z: 0, w: 1 }, a2, turn), b1, b2, true);
     bonds.set(key, { joint, b1, b2, a1, a2, turn, ids, reach: bondReach(sticky), grainOf });
   };
+  /**
+   * Pair `pair` of sides `a`, `b` (as byHandle's, or a soft body's) pushed
+   * apart by `dv` m/s this step, with the force of `mass` behind it, at `_a`
+   * along `blow`: a strike, if it's jumped enough since the step before (more
+   * if they were touching already: a jostle, not a blow).
+   */
+  const strikes = (pair, a, b, dv, mass, touching, blow, now) => {
+    if (dv - pair.dv <= (touching ? IMPACT_DV_TOUCHING : IMPACT_DV) || now - pair.struck <= IMPACT_GAP) return;
+    pair.struck = now;
+    const bounce = (a.material.restitution + b.material.restitution) / 2;
+    const speed = dv / (1 + bounce);
+    impact(a.material, a.size, speed, mass, _a);
+    impact(b.material, b.size, speed, mass, _a);
+    for (const side of [a, b]) {
+      // clay: squashed along the blow
+      if (side.entry?.material.plasticity && now - (side.entry.squashedAt ?? 0) > SQUASH_GAP) {
+        const t = squashed(side.entry, blow, speed);
+        if (t) {
+          side.entry.squashedAt = now;
+          onDeform?.(side.key, t);
+        }
+      }
+      particles.burst(side.material, _a, speed);
+      if (side.entry?.material.jiggle) jiggle(side.entry, speed);
+      // held: the hand feels it, harder the harder it struck
+      if (side.body) for (const hand of holds.handsOf(side.key)) pulseHand(hand, Math.min(1, 0.2 + speed * 0.3), Math.min(80, 25 + speed * 20));
+    }
+  };
   const slideBuzz = useRef({}); // hand -> when it may buzz for sliding again
   const gl = useThree((s) => s.gl);
   useAfterPhysicsStep((world) => {
@@ -716,6 +780,7 @@ export function ContactSounds({ registry, disc, holds, onDeform }) {
           if (done.has(key) && impulse <= 0) return;
           const pair = pairs.get(key) ?? { dv: 0, struck: 0 };
           pairs.set(key, pair);
+          const touching = now - (pair.seen ?? -Infinity) < TOUCHING_S;
           pair.seen = now;
           if (impulse <= 0) {
             pair.dv = 0;
@@ -740,28 +805,8 @@ export function ContactSounds({ registry, disc, holds, onDeform }) {
           if (ma === Infinity && mb === Infinity) return;
           const mass = 1 / (1 / ma + 1 / mb);
           const dv = impulse / mass;
-          if (dv - pair.dv > IMPACT_DV && now - pair.struck > IMPACT_GAP) {
-            pair.struck = now;
-            const bounce = (a.material.restitution + b.material.restitution) / 2;
-            const speed = dv / (1 + bounce);
-            impact(a.material, a.size, speed, mass, _a);
-            impact(b.material, b.size, speed, mass, _a);
-            const blow = manifold.normal();
-            for (const side of [a, b]) {
-              // clay: squashed along the blow
-              if (side.entry?.material.plasticity && now - (side.entry.squashedAt ?? 0) > SQUASH_GAP) {
-                const t = squashed(side.entry, blow, speed);
-                if (t) {
-                  side.entry.squashedAt = now;
-                  onDeform?.(side.key, t);
-                }
-              }
-              particles.burst(side.material, _a, speed);
-              if (side.entry?.material.jiggle) jiggle(side.entry, speed);
-              // held: the hand feels it, harder the harder it struck
-              if (side.body) for (const hand of holds.handsOf(side.key)) pulseHand(hand, Math.min(1, 0.2 + speed * 0.3), Math.min(80, 25 + speed * 20));
-            }
-          }
+          // (glued together, they don't strike each other)
+          if (!(touching && bonds.has(key))) strikes(pair, a, b, dv, mass, touching, manifold.normal(), now);
           pair.dv = dv;
           // something sticky touching: they bond where they touch
           if ((a.material.sticky || b.material.sticky) && !bonds.has(key) && now - (pair.unbonded ?? -Infinity) > REBOND_S) {
@@ -787,6 +832,50 @@ export function ContactSounds({ registry, disc, holds, onDeform }) {
                   }
         });
       });
+    }
+    // soft bodies and cloth: what their points touch (but each other), as one object, all its points' pushes together
+    const points = new Map(); // a point's collider handle -> its object's side
+    for (const [id, pour] of pours) {
+      const sim = pour.material.simulation;
+      if ((sim !== 'soft' && sim !== 'cloth') || pour.bodies.every((b) => b.isSleeping())) continue;
+      const mass = pourMass(id);
+      const side = { key: `s${id}`, material: pour.material, size: Math.cbrt(pour.volume ?? mass / pour.material.density), mass };
+      for (const b of pour.bodies) points.set(b.collider(0).handle, side);
+    }
+    const touches = new Map(); // pair key -> { a, b, impulse, at, blow, n }
+    for (const [handle, a] of points) {
+      const collider = world.getCollider(handle);
+      if (collider.parent().isSleeping()) continue;
+      world.contactPairsWith(collider, (other) => {
+        const b = byHandle.get(other.handle) ?? points.get(other.handle);
+        if (!b || b === a || (b.mass && b.key < a.key)) return; // (two soft bodies: once)
+        world.contactPair(collider, other, (manifold) => {
+          let impulse = 0;
+          for (let i = 0; i < manifold.numContacts(); i++) impulse += manifold.contactImpulse(i);
+          if (impulse <= 0 || !manifold.numSolverContacts()) return;
+          const key = `${a.key}:${b.key}`;
+          const t = touches.get(key) ?? { a, b, impulse: 0, at: new THREE.Vector3(), n: 0, blow: manifold.normal() };
+          touches.set(key, t);
+          const p = manifold.solverContactPoint(0);
+          t.impulse += impulse;
+          t.at.x += p.x;
+          t.at.y += p.y;
+          t.at.z += p.z;
+          t.n++;
+        });
+      });
+    }
+    for (const [key, { a, b, impulse, at, n, blow }] of touches) {
+      const pair = pairs.get(key) ?? { dv: 0, struck: 0 };
+      pairs.set(key, pair);
+      const touching = now - (pair.seen ?? -Infinity) < TOUCHING_S;
+      pair.seen = now;
+      const mb = b.mass ?? (b.body?.isDynamic() ? b.body.mass() : Infinity);
+      const mass = 1 / (1 / a.mass + 1 / mb);
+      const dv = impulse / mass;
+      _a.copy(at).divideScalar(n);
+      strikes(pair, a, b, dv, mass, touching, blow, now);
+      pair.dv = dv;
     }
     // forget pairs long apart
     if (pairs.size > 500) for (const [key, pair] of pairs) if (now - pair.seen > 1) pairs.delete(key);

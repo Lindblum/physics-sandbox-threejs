@@ -12,9 +12,9 @@ import { Probes, useControllerGrips } from './Grab.jsx';
 import { SOLID_BACKGROUND } from './menu.js';
 import { FramePacing } from './FramePacing.jsx';
 import { Physics, useRapier } from '@react-three/rapier';
-import { AirDrag, ContactSounds, Disc, GlowLights, Holds, MaterialLabels, Particles, SandboxBodies, makeBody, particles, setLookQuality, transformMatrix, withMade } from './Physics.jsx';
+import { AirDrag, BounceThreshold, ContactSounds, Disc, GlowLights, Holds, MaterialLabels, Particles, SandboxBodies, makeBody, particles, setLookQuality, transformMatrix, withMade } from './Physics.jsx';
 import { SHAPES, restingPosition, shapeOf, wireOf } from './shapes.js';
-import { AxisGizmo } from './Gizmo.jsx';
+import { AxisGizmo, Stretcher } from './Gizmo.jsx';
 import { materialById, randomMaterial } from './materials.js';
 import { Fluids } from './Fluids.jsx';
 import { PhoneStereoCameraFeed, PhoneStereoXR } from './PhoneStereo.jsx';
@@ -283,7 +283,7 @@ const _hand = new THREE.Vector3();
  * player's size (the scene scale's inverse); `onScale(scale)` hears it
  * change; `resetScale` changing puts it back to real size, where you stand.
  */
-function Player({ origin, panels, registry, holds, textSize, homeScale, onScale, onResize, resetScale, placing, onPlace, surfaces, previews, menus, onSelect, onFocus, children }) {
+function Player({ origin, panels, registry, holds, stretcher, onPick, textSize, homeScale, onScale, onResize, resetScale, placing, onPlace, surfaces, previews, menus, onSelect, onFocus, children }) {
   const left = useRef(null);
   const right = useRef(null);
   const probes = useMemo(() => ({ left, right }), []);
@@ -294,6 +294,8 @@ function Player({ origin, panels, registry, holds, textSize, homeScale, onScale,
     origin,
     registry,
     holds,
+    stretcher,
+    onPick,
     probes,
     textSize,
     home: MENU_HOME,
@@ -575,6 +577,7 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   const pointed = useMemo(() => new Map(), []);
   const viewScale = () => origin.current?.scale.x ?? 1;
   const holds = useMemo(() => new Holds(registry), [registry]);
+  if (import.meta.env.DEV) window.__registry = registry; // (for tests)
   // an object resized with both hands keeps its new size (see Grab.jsx)
   const onResize = (id, transform) => setBodies((list) => list.map((b) => (b.id === id ? { ...b, transform } : b)));
   // the shapes' and Paste's wireframes: the mouse's, and each controller's
@@ -593,6 +596,8 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   };
   // the object Select picked last (its frame shows, to stretch it by)
   const [selected, setSelected] = useState(null);
+  const stretcher = useMemo(() => new Stretcher(registry, holds), [registry, holds]);
+  stretcher.onResize = onResize;
   const [handlers, discHandlers, click] = useTools({
     tool: state.tool,
     material: state.material,
@@ -648,6 +653,7 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
         <Disc colliderRef={discCollider} meshRef={discMesh} handlers={discHandlers} />
         <SandboxBodies bodies={bodies} setBodies={setBodies} registry={registry} holds={holds} handlers={handlers} />
         <AirDrag registry={registry} />
+        <BounceThreshold registry={registry} />
         <ContactSounds registry={registry} disc={discCollider} holds={holds} onDeform={onResize} />
         <Fluids
           bodies={bodies}
@@ -665,7 +671,7 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
       <Particles registry={registry} />
       {state.glowLights && <GlowLights registry={registry} />}
       <MaterialLabels registry={registry} holds={holds} pointed={pointed} viewScale={viewScale} selected={state.tool === 'select' ? selected : null} />
-      <AxisGizmo selected={state.tool === 'select' ? selected : null} registry={registry} holds={holds} onResize={onResize} viewScale={viewScale} />
+      <AxisGizmo selected={state.tool === 'select' ? selected : null} stretcher={stretcher} viewScale={viewScale} />
       <HoverUpdate pointed={pointed} />
       {state.grid && <Grid />}
       <Preview spec={spec} previewRef={mousePreview} />
@@ -686,6 +692,8 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
         panels={panelRefs}
         registry={registry}
         holds={holds}
+        stretcher={stretcher}
+        onPick={setSelected}
         textSize={state.textSize}
         homeScale={phone && state.stereo ? PHONE_STEREO_MENU_SCALE : 1}
       >

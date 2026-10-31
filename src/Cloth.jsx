@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { AIR_DENSITY } from './materials.js';
 import { CUBE_SIZE, CYLINDER, SPHERE_RADIUS, TORUS, shapeOf } from './shapes.js';
-import { GROUPS, lookMaterial, onLooksChanged } from './Physics.jsx';
+import { BOUNCE_MIN, GROUPS, lookMaterial, onLooksChanged } from './Physics.jsx';
 import { pours, useGrainPointer } from './grains.js';
 
 // Cloth and soft bodies: shapes whose surface is a mesh of points, each a
@@ -36,6 +36,7 @@ const MASS_PER_POINT = 0.002; // kg (lighter, and things resting on it would pre
 const STUFFING = 3000; // Pa of pressure for each part of its volume it's lost (more: firmer)
 const MAX_PRESSURE = 1500; // Pa
 const DAMPING = { cloth: 1.5, soft: 0.5 }; // per second: how quickly its wobbling dies down (unless its material's damping says)
+const SETTLE = { cloth: 2, soft: 10 }; // per second: how quickly its points' wobbling against each other dies down (as a whole it moves and turns on undamped)
 const YIELD = 0.01; // m: a plastic soft body pushed further than this out of shape keeps part of it (its own weight sags it less)
 const SET = 0.3; // ...this much of it, each step
 const FALLEN_Y = -10;
@@ -177,6 +178,51 @@ function rotationFitting(points, shape, centre, last) {
 }
 
 /** The cloth's surface for drawing: its triangles, UVs in metres (each point mapped from the plane its surface faces most). */
+const _vc = new THREE.Vector3();
+const _w = new THREE.Vector3();
+const _r = new THREE.Vector3();
+const _L = new THREE.Vector3();
+const _I = new THREE.Matrix3();
+
+/**
+ * Points `bodies` (all the same mass, at `at`) each moved `k` (0 to 1) of the
+ * way from its own velocity to the whole's at its place (the whole's moving
+ * and turning): their wobbling against each other dies down. Each bounces
+ * by `bounce` (restitution), but not slower than BOUNCE_MIN (see BounceThreshold).
+ */
+function settle(bodies, at, k, bounce) {
+  const centre = _c.set(0, 0, 0);
+  for (const p of at) centre.add(p);
+  centre.divideScalar(at.length);
+  _vc.set(0, 0, 0);
+  _L.set(0, 0, 0);
+  const I = _I.set(0, 0, 0, 0, 0, 0, 0, 0, 0).elements;
+  bodies.forEach((b, i) => {
+    const v = b.linvel();
+    _vc.x += v.x;
+    _vc.y += v.y;
+    _vc.z += v.z;
+    _r.subVectors(at[i], centre);
+    _L.add(_w.set(v.x, v.y, v.z).cross(_r).negate()); // (r × v)
+    const rr = _r.lengthSq();
+    const r = [_r.x, _r.y, _r.z];
+    for (let row = 0; row < 3; row++) for (let col = 0; col < 3; col++) I[col * 3 + row] += (row === col ? rr : 0) - r[row] * r[col];
+  });
+  _vc.divideScalar(bodies.length);
+  // the whole's spin: ω = I⁻¹ L (none, if its points are all in a line)
+  const spin = _I.determinant() > 1e-12 ? _L.applyMatrix3(_I.invert()) : _L.set(0, 0, 0);
+  bodies.forEach((b, i) => {
+    const v = b.linvel();
+    const speed = Math.hypot(v.x, v.y, v.z);
+    const c = b.collider(0);
+    const restitution = speed >= BOUNCE_MIN ? bounce : 0;
+    if (c.restitution() !== restitution) c.setRestitution(restitution);
+    if (b.isKinematic()) return;
+    _w.copy(spin).cross(_r.subVectors(at[i], centre)).add(_vc); // (the whole's velocity here)
+    b.setLinvel({ x: v.x + (_w.x - v.x) * k, y: v.y + (_w.y - v.y) * k, z: v.z + (_w.z - v.z) * k }, false);
+  });
+}
+
 function surfaceGeometry(mesh) {
   const g = new THREE.BufferGeometry();
   const pos = new Float32Array(mesh.points.length * 3);
@@ -222,7 +268,7 @@ export function ClothSheet({ def, material, fluidGrains, setBodies, onClick, gra
         rapier.RigidBodyDesc.dynamic()
           .setTranslation(p.x, p.y, p.z)
           .setLinearDamping(material.damping || (DAMPING[material.simulation] ?? 0.5))
-          .setAngularDamping(1)
+          .lockRotations() // (a point: its spinning would only keep it, and all of it, stirring)
           .setGravityScale(1 - AIR_DENSITY / material.density)
           .setCanSleep(true),
       );
@@ -238,7 +284,7 @@ export function ClothSheet({ def, material, fluidGrains, setBodies, onClick, gra
     });
     // the threads, each as long as it was made
     mesh.edges.forEach(([a, b], i) => world.createImpulseJoint(rapier.JointData.rope(mesh.rest[i], { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }), bodies[a], bodies[b], true));
-    const pour = { def, material, radius: mesh.radius, bodies, meshes: () => [drawn.current] };
+    const pour = { def, material, radius: mesh.radius, volume: mesh.volume, bodies, meshes: () => [drawn.current] };
     pours.set(def.id, pour);
     fluidGrains.set(def.id, {
       material,
@@ -262,6 +308,7 @@ export function ClothSheet({ def, material, fluidGrains, setBodies, onClick, gra
     const bodies = pour.bodies;
     bodies.forEach((b, i) => at[i].copy(b.translation()));
     const dt = w.timestep;
+    settle(bodies, at, 1 - Math.exp(-(SETTLE[material.simulation] ?? 0) * dt), soft ? material.restitution : 0);
     // the stuffing (cloth): the surface pushed out (each triangle, by its area, along its normal) as far as it's lost volume
     const lost = soft ? 0 : 1 - volumeOf(at, mesh.triangles) / mesh.volume;
     if (lost > 0) {

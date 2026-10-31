@@ -10,6 +10,7 @@ import * as THREE from 'three';
 
 /** Every pour and cloth by its object's id: { def, material, radius (its grains'), bodies, meshes() (what's drawn, to point at) }. */
 export const pours = new Map();
+if (import.meta.env.DEV) window.__pours = pours; // (for tests)
 /** Who holds grains now, by holder ('left', 'right', 'pointer'): { id, by, bodies, offsets, point, turn0, velocity, last }. */
 export const grainHolds = new Map();
 

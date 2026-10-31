@@ -193,6 +193,8 @@ export function useControllerGrips({
   origin,
   registry,
   holds,
+  stretcher,
+  onPick,
   probes,
   textSize,
   home,
@@ -209,7 +211,7 @@ export function useControllerGrips({
 }) {
   const gl = useThree((s) => s.gl);
   // hand -> { target: 'body', id, offset, point, byRay, at } | { target: 'grains', id, offset, point } | { target: 'panel', key, offset, point, size, grow, zone }
-  //   | { target: 'scale' } | { target: 'resize', id } | { target: 'none' }
+  //   | { target: 'stretch', byRay } (a stretching cube, see Gizmo.jsx) | { target: 'scale' } | { target: 'resize', id } | { target: 'none' }
   const grabs = useRef({});
   const scaling = useRef(null); // both grips in mid-air: { k0, turn0, mid0 (world), span0, angle0 (tracking space) }
   const reported = useRef(1);
@@ -369,6 +371,7 @@ export function useControllerGrips({
       if (grabs.current[other]?.id === id) grabs.current[other] = { target: 'none' };
       if (!entry?.mesh.current || !holds.take(id, hand)) return;
       buzz(hand, PULSE.grab);
+      onPick?.(id); // (selected: with Select, its frame shows, to stretch it by)
       grabs.current[hand] = bodyGrab(c, id);
       grabs.current[hand].byRay = byRay;
     };
@@ -490,7 +493,14 @@ export function useControllerGrips({
       tap.tappedAt = -Infinity;
       tap.pressedAt = now;
       grabs.current[hand] = { target: 'none' };
-      // the probe on an object: that, before anything
+      // the probe on one of the selected object's stretching cubes (see Gizmo.jsx): stretching it, before anything
+      const handle = stretcher?.handleNear(controllerTip(c.rayMatrix, _tip), (PROBE_RADIUS + PROBE_REACH) * k);
+      if (handle != null && stretcher.begin(handle, hand, _tip.clone())) {
+        grabs.current[hand] = { target: 'stretch' };
+        buzz(hand, PULSE.grab);
+        return;
+      }
+      // the probe on an object: that
       const touched = bodyTouched(c);
       const other0 = grabs.current[otherHand(hand)];
       if (touched != null && other0?.target === 'body' && other0.id === touched && holds.isHeld(touched, otherHand(hand)) && controllers[otherHand(hand)]) {
@@ -541,6 +551,15 @@ export function useControllerGrips({
         if (mine.length) buzz(hand, PULSE.detach);
         return;
       }
+      // a stretching cube pointed at: that, before what's behind it (it shows through)
+      raycaster.ray.copy(c.ray);
+      raycaster.far = RAY_REACH * k;
+      const cube = stretcher?.handlePointed(raycaster);
+      if (cube && (!at || cube.distance <= at.distance) && stretcher.begin(cube.index, hand, c.ray.clone())) {
+        grabs.current[hand] = { target: 'stretch', byRay: true };
+        buzz(hand, PULSE.grab);
+        return;
+      }
       // a panel, an object or some grains pointed at: the nearest
       const pointed = bodyPointed(c);
       const bodyDistance = pointed == null ? Infinity : raycaster.ray.origin.distanceTo(registry.get(pointed).mesh.current.getWorldPosition(_v));
@@ -573,6 +592,10 @@ export function useControllerGrips({
       }
       if (g?.target === 'grains') {
         releaseGrains(hand);
+        return;
+      }
+      if (g?.target === 'stretch') {
+        stretcher.end(hand);
         return;
       }
       if (g?.target !== 'panel') return;
@@ -650,6 +673,12 @@ export function useControllerGrips({
       // (an object another hand or a pointer took away isn't this hand's any more)
       if (g?.target === 'body' && !holds.isHeld(g.id, hand)) grabs.current[hand] = { target: 'none' };
       holding.current[hand] = Boolean(c && g && g.target !== 'none');
+      if (c && g?.target === 'stretch') {
+        // the cube follows the probe, or the ray (along its axis)
+        if (stretcher.drag?.by !== hand) grabs.current[hand] = { target: 'none' }; // (its object went)
+        else stretcher.move(hand, g.byRay ? c.ray : controllerTip(c.rayMatrix, new THREE.Vector3()));
+        continue;
+      }
       if (!c || !g || g.target === 'none' || g.target === 'scale' || g.target === 'resize') continue;
       if (g.target === 'panel' && !groupOf(g.key)) continue;
       const { x, y } = c.stick;
