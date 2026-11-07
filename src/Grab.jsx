@@ -31,7 +31,8 @@ import { grainHolds, grainMeshes, grainsNear, moveGrains, releaseGrains, takeGra
 // Let go of either grip and its new size is its own (its collider too).
 //
 // The sticks: the left moves the player, the way the left controller points
-// (level with the floor), the right turns them about their head. Pressed in
+// (level with the floor), the right turns them about their head, or (up /
+// down) raises and lowers them, never below the floor. Pressed in
 // (L3 / R3), a stick switches to the panels docked on its controller (its
 // probe turns blue): up and down go through their buttons, settings and
 // choices (left and right set a slider), A / X presses the one lit, B / Y
@@ -59,7 +60,8 @@ import { grainHolds, grainMeshes, grainsNear, moveGrains, releaseGrains, takeGra
 // Both grips held in mid-air (neither probe on an object, neither holding a
 // panel), as in Tilt Brush: the scene scales with the distance between the
 // hands and turns with the line between them, about their midpoint, which
-// stays put. It's the player that changes size (the XR origin scales), so the
+// stays put sideways; the player's feet stay on the floor (the disc's top) at
+// every size, so small, your eyes are near the ground. It's the player that changes size (the XR origin scales), so the
 // physics is untouched; the probes, reaches and labels go with them.
 //
 // Without controllers (gaze, phones) the menu stands at `home` instead and
@@ -263,6 +265,7 @@ export function useControllerGrips({
         o.scale.setScalar(size);
         o.rotation.y = turn;
         o.position.copy(sc.mid0).sub(mid);
+        o.position.y = 0; // (sideways only: your feet stay on the floor, the disc's top, at every size)
         o.updateMatrixWorld(true);
         _originInverse.copy(o.matrixWorld).invert();
         controllers = readControllers(frame, referenceSpace, o);
@@ -858,7 +861,12 @@ export function useControllerGrips({
       }
     }
     const rc = controllers.right;
-    if (o && rc && !holding.current.right && !menuMode.current.right && rc.stick.x) {
+    const rightFree = o && rc && !holding.current.right && !menuMode.current.right;
+    // (whichever way it's tilted more: a push a little off straight doesn't do both)
+    if (rightFree && Math.abs(rc.stick.y) > Math.abs(rc.stick.x)) {
+      // pushed up: rising (stick y is negative up); down: sinking, no lower than the floor
+      o.position.y = Math.max(0, o.position.y - rc.stick.y * MOVE_SPEED * dt * k);
+    } else if (rightFree && rc.stick.x) {
       // (pushed right: turned right) about the head, so the view turns where it is
       const turn = -rc.stick.x * TURN_SPEED * dt;
       gl.xr.getCamera().getWorldPosition(_pos);

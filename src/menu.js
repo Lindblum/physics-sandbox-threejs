@@ -1,5 +1,5 @@
 // Options menu model shared by the windowed panel (DOM) and the XR panel
-// (drawn on a canvas): four groups, File, Physics, Video and Accessibility, each
+// (drawn on a canvas): four groups, File, Physics, Display and Accessibility, each
 // opening a list of setting buttons beneath it, each "Name: Value". A
 // dropdown opens a list of choices beneath it (a chevron on its right); a
 // slider sets a value along its track; the rest toggle when pressed.
@@ -194,7 +194,7 @@ export const PHYSICS_RATE = Object.freeze({ min: 30, max: 240, step: 30, default
 export const GRAIN_DETAIL = Object.freeze({ min: 0.25, max: 2, step: 0.25, default: 1 });
 /** Physics → Cloth Detail: how fine a cloth's mesh is, a multiplier (for those made from now on). */
 export const CLOTH_DETAIL = Object.freeze({ min: 0.5, max: 2, step: 0.25, default: 1 });
-/** Video → Liquid Surface Detail: the metaballs' grid, cells a side. */
+/** Display → Liquid Surface Detail: the metaballs' grid, cells a side. */
 export const LIQUID_DETAIL = Object.freeze({ min: 24, max: 80, step: 8, default: 56 });
 
 /** Accessibility → Volume: the sounds, 0 (off) to 100% (as grid-game-threejs's Sounds). */
@@ -274,7 +274,7 @@ export function pickedChoice(items, pickId) {
 }
 
 /**
- * Items: the groups File, Physics, Video and Accessibility, { id, label, icon, group: { open, items } },
+ * Items: the groups File, Physics, Display and Accessibility, { id, label, icon, group: { open, items } },
  * which, when open (in `state.groups`), list their settings beneath, indented like
  * a dropdown's choices. Settings: { id, label ("Name: Value", see splitLabel),
  * icon, disabled?, title?, dropdown?, slider? }. `slider`: { min, max, step, value }. `dropdown`: { open, options: [{ id,
@@ -293,7 +293,7 @@ export function menuItems(state, env) {
   return [
     group('file', 'File', 'file', ['new', 'save', 'open']),
     group('physics', 'Physics', 'physics', ['gravity', 'simulation', 'physicsRate', 'grainDetail', 'clothDetail', ...ALLOW.map((a) => a.id), 'reset']),
-    group('video', 'Video', 'video', ['background', 'view', 'grid', 'reflections', 'refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'liquidDetail', 'particles', 'vsync', 'xrResolution']),
+    group('display', 'Display', 'display', ['view', 'background', 'grid', 'reflections', 'refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'liquidDetail', 'particles', 'vsync', 'xrResolution']),
     group('accessibility', 'Accessibility', 'accessibility', ['volume', 'vibration', 'textSize', 'controllerGuide']),
   ];
 }

@@ -184,7 +184,7 @@ export class ParticleSystem {
     this.glow = new Batch(true);
     this.plain = new Batch(false);
     this.owed = new Map(); // emitter key -> particles owed (fractional)
-    this.density = 1; // Video → Particles: High 1, Low about a third
+    this.density = 1; // Display → Particles: High 1, Low about a third
   }
 
   get objects() {

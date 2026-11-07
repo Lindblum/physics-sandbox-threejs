@@ -117,13 +117,13 @@ const jitter = (a, b) => {
 };
 const _hsl = { h: 0, s: 0, l: 0 };
 
-/** Video's settings the looks follow: Refraction, Surface Detail (see setLookQuality). */
+/** Display's settings the looks follow: Refraction, Surface Detail (see setLookQuality). */
 const lookQuality = { refraction: true, surfaceDetail: true };
 const LOOKS = new Map();
 const lookListeners = new Set();
 
 /**
- * Video → Refraction and Surface Detail changed: every look is made again
+ * Display → Refraction and Surface Detail changed: every look is made again
  * (call while rendering, before the objects are; `onLooksChanged` hears it).
  */
 export function setLookQuality({ refraction, surfaceDetail }) {
@@ -139,7 +139,7 @@ export const onLooksChanged = (f) => lookListeners.add(f);
  * A material's look as a three.js material: its colour (look `variant` of
  * VARIANTS, apart by its colour_variance), surface pattern (its bumps and
  * shine with Surface Detail), shine and glow. `transmission`: see-through as
- * glass is, refracting by its ior (Video → Refraction; always in the exported
+ * glass is, refracting by its ior (Display → Refraction; always in the exported
  * scene); without it the table's opacity stands in (far cheaper).
  */
 export function lookMaterial(material, { variant = 0, transmission = lookQuality.refraction, detail = lookQuality.surfaceDetail } = {}) {

@@ -26,7 +26,7 @@ const TEXTS = {
   right: {
     'xr-standard-trigger': TRIGGER,
     'xr-standard-squeeze': GRIP,
-    'xr-standard-thumbstick': 'Turn\nPress: this hand\'s menus / back\nGripping: push / pull, roll',
+    'xr-standard-thumbstick': 'Turn; up / down: rise, sink\nPress: this hand\'s menus / back\nGripping: push / pull, roll',
     'a-button': 'In menus: choose',
     'b-button': 'In menus: back a level',
   },

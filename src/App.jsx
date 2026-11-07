@@ -69,7 +69,7 @@ const xrOptions = {
   // headset emulator on localhost during development only
   emulate: import.meta.env.DEV ? 'metaQuest3' : false,
   foveation: 0.5,
-  frameBufferScaling: undefined, // Options → Video → XR Resolution, set as each session starts (see enterXR)
+  frameBufferScaling: undefined, // Options → Display → XR Resolution, set as each session starts (see enterXR)
 };
 const store = createXRStore(xrOptions);
 // (development only: the store, for driving XR sessions from tests and the console)
@@ -111,7 +111,7 @@ const REFLECTIONS_KEY = 'physics-sandbox.reflections';
 const EFFECTS_KEY = 'physics-sandbox.effects';
 const DETAIL_KEY = 'physics-sandbox.detail';
 
-/** The simulation's resolutions (Physics) and the liquids' surface's (Video), as last left. */
+/** The simulation's resolutions (Physics) and the liquids' surface's (Display), as last left. */
 function loadDetail() {
   let saved = {};
   try {
@@ -128,7 +128,7 @@ function loadDetail() {
 }
 
 /**
- * Video's costly effects, as last left: { refraction, shadows, glowLights,
+ * Display's costly effects, as last left: { refraction, shadows, glowLights,
  * surfaceDetail, liquidSurfaces (metaballs), particles ('high' / 'low') }.
  * At first all on, but Refraction off in a headset (it draws the scene again).
  */
@@ -250,7 +250,7 @@ function useViewerState() {
   const [keepXRPose, setKeepXRPose] = useState(false); // the XR session is starting again (XR Resolution)
   const [menuOpen, setMenuOpen] = useState(true); // shared by the windowed and XR panels
   const [tools, setTools] = useState(loadTools); // the Tools panel: { tool, material, open }, likewise
-  const [reflections, setReflections] = useState(loadReflections); // Options → Video → Reflections
+  const [reflections, setReflections] = useState(loadReflections); // Options → Display → Reflections
   useEffect(() => {
     try {
       localStorage.setItem(REFLECTIONS_KEY, JSON.stringify(reflections));
@@ -258,7 +258,7 @@ function useViewerState() {
       // (not remembered)
     }
   }, [reflections]);
-  const [effects, setEffects] = useState(loadEffects); // Options → Video's costly effects (see loadEffects)
+  const [effects, setEffects] = useState(loadEffects); // Options → Display's costly effects (see loadEffects)
   useEffect(() => {
     try {
       localStorage.setItem(EFFECTS_KEY, JSON.stringify(effects));
@@ -266,7 +266,7 @@ function useViewerState() {
       // (not remembered)
     }
   }, [effects]);
-  const [detail, setDetail] = useState(loadDetail); // Physics' and Video's resolutions (see loadDetail)
+  const [detail, setDetail] = useState(loadDetail); // Physics' and Display's resolutions (see loadDetail)
   useEffect(() => {
     try {
       localStorage.setItem(DETAIL_KEY, JSON.stringify(detail));
@@ -284,7 +284,7 @@ function useViewerState() {
       // (not remembered)
     }
   }, [tools]);
-  const [groups, setGroups] = useState([]); // the groups (Physics / Video / Accessibility) whose settings are open, likewise
+  const [groups, setGroups] = useState([]); // the groups (Physics / Display / Accessibility) whose settings are open, likewise
   const [dropdowns, setDropdowns] = useState([]); // the dropdowns whose lists are open, likewise
   const [accessibility, setAccessibility] = useState(loadAccessibility); // { volume, vibration, textSize, controllerGuide }
   useEffect(() => setVolume(accessibility.volume), [accessibility.volume]);
@@ -297,7 +297,7 @@ function useViewerState() {
       // (not remembered)
     }
   }, [accessibility]);
-  const [vsync, setVSync] = useState(loadVSync); // Options → Video → VSync (see FramePacing)
+  const [vsync, setVSync] = useState(loadVSync); // Options → Display → VSync (see FramePacing)
   useEffect(() => {
     try {
       localStorage.setItem(VSYNC_KEY, JSON.stringify(vsync));

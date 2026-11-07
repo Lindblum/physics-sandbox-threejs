@@ -127,7 +127,7 @@ function Backdrop({ background }) {
  * skybox behind: the sky, brightened (the stars alone are too dark to mirror:
  * metals and mercury would look black in it), with a studio's lights in it for
  * highlights. With passthrough or a solid colour behind, the stars would look
- * wrong: a neutral studio instead. Video → Reflections off: nothing (only the
+ * wrong: a neutral studio instead. Display → Reflections off: nothing (only the
  * lights light them; faster).
  */
 function Environment({ reflections, sky }) {
@@ -179,7 +179,7 @@ function Environment({ reflections, sky }) {
   return null;
 }
 
-/** A sun casting shadows onto the disc (Video → Shadows), and a soft fill from the sky. */
+/** A sun casting shadows onto the disc (Display → Shadows), and a soft fill from the sky. */
 function Lights({ shadows }) {
   return (
     <>
@@ -522,9 +522,9 @@ function Preview({ spec, previewRef }) {
   );
 }
 
-const GRID = { step: 0.1, radius: 1, height: 2 }; // m: Video → Show Grid: lines this far apart, over the disc, up to this high
+const GRID = { step: 0.1, radius: 1, height: 2 }; // m: Display → Show Grid: lines this far apart, over the disc, up to this high
 
-/** Video → Show Grid: thin grey lines every 10 cm through the space over the disc (a cylinder as wide as it, 2 m high). */
+/** Display → Show Grid: thin grey lines every 10 cm through the space over the disc (a cylinder as wide as it, 2 m high). */
 function Grid() {
   const geometry = useMemo(() => {
     const points = [];
@@ -571,7 +571,7 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   const cameraPassthrough = state.handheld && state.passthrough;
   const [cameraFailed, setCameraFailed] = useState(false);
   useEffect(() => setCameraFailed(false), [cameraPassthrough]);
-  // Video's costly effects: the looks made again for Refraction and Surface Detail (before the objects render), and how many particles
+  // Display's costly effects: the looks made again for Refraction and Surface Detail (before the objects render), and how many particles
   // (no refraction in XR: its pass draws into an empty target there, every frame)
   setLookQuality({ refraction: state.refraction && !inSession, surfaceDetail: state.surfaceDetail });
   particles.density = state.particles === 'low' ? 0.35 : 1;

@@ -131,7 +131,7 @@ function Pour({ def, setBodies, onClick, smooth, detail, resolution, grabs, poin
   useEffect(() => () => surface?.geometry.dispose(), [surface]);
   const surfaceRef = useRef(null);
   surfaceRef.current = surface;
-  if (surface) surface.material = surfaceLook(material); // (made again when Video's looks change)
+  if (surface) surface.material = surfaceLook(material); // (made again when Display's looks change)
 
   useEffect(() => {
     const granular = material.simulation === 'granular';
@@ -346,7 +346,7 @@ function liquidForces(pours, dt) {
 
 /**
  * Every pour among `bodies` (those with `fluid`), and their liquids' forces;
- * `smooth`: Video → Liquid Surfaces (metaballs), `resolution`: Liquid Surface
+ * `smooth`: Display → Liquid Surfaces (metaballs), `resolution`: Liquid Surface
  * Detail (the metaballs' grid); `grainDetail`, `clothDetail`: Physics → Grain
  * Detail and Cloth Detail (for what's made from now on); `grabs(e)`: whether
  * a press picks some up, `pointed`: pointer id -> object id (for labels).
