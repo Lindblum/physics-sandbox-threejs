@@ -2,10 +2,11 @@ import { useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { pulse, readControllers } from './grip.js';
-import { focusables, slideEndId, slideId } from './menu.js';
+import { focusables, parseSlide, slideEndId, slideId } from './menu.js';
 import { distanceOutside as shapeDistance, restingPosition, shapeOf } from './shapes.js';
 import { aboveFloor, transformMatrix } from './Physics.jsx';
 import { grainHolds, grainMeshes, grainsNear, moveGrains, releaseGrains, takeGrains } from './grains.js';
+import { playTick } from './sound.js';
 
 // Touch controller grips: the objects, and the XR panels, as in grid-game-threejs.
 //
@@ -30,14 +31,17 @@ import { grainHolds, grainMeshes, grainsNear, moveGrains, releaseGrains, takeGra
 // along that line (the line when the trigger was pressed), stretching it.
 // Let go of either grip and its new size is its own (its collider too).
 //
-// The sticks: the left moves the player, the way the left controller points
-// (level with the floor), the right turns them about their head, or (up /
-// down) raises and lowers them, never below the floor. Pressed in
-// (L3 / R3), a stick switches to the panels docked on its controller (its
-// probe turns blue): up and down go through their buttons, settings and
-// choices (left and right set a slider), A / X presses the one lit, B / Y
-// goes up a level (closes the dropdown or group it's in). Pressed again,
-// back to moving.
+// The sticks: free flight. The left flies the player the way the left
+// controller points (up and down too; sideways stays level), the right turns
+// them about their head, or (up / down) raises and lowers them.
+// A controller whose ray is on a panel works that panel with its stick
+// instead (threejs-ui): nothing moves or turns meanwhile; the lit control
+// starts at the one pointed at (and jumps to it again whenever the ray moves
+// onto another), up and down go through its buttons, settings and choices
+// (left and right set a slider), A / X presses the one lit, B / Y goes up a
+// level (closes the dropdown or group it's in). Each step ticks. Pressed in
+// (L3 / R3), a stick works the panels docked on its controller from anywhere
+// (its probe turns blue); pressed again, back to flying.
 //
 // With a shape tool (or Paste) in hand, each controller shows a wireframe of
 // what it would make: on the surface its ray points at (turned the way it
@@ -60,8 +64,7 @@ import { grainHolds, grainMeshes, grainsNear, moveGrains, releaseGrains, takeGra
 // Both grips held in mid-air (neither probe on an object, neither holding a
 // panel), as in Tilt Brush: the scene scales with the distance between the
 // hands and turns with the line between them, about their midpoint, which
-// stays put sideways; the player's feet stay on the floor (the disc's top) at
-// every size, so small, your eyes are near the ground. It's the player that changes size (the XR origin scales), so the
+// stays put. It's the player that changes size (the XR origin scales), so the
 // physics is untouched; the probes, reaches and labels go with them.
 //
 // Without controllers (gaze, phones) the menu stands at `home` instead and
@@ -223,6 +226,7 @@ export function useControllerGrips({
   const triggered = useRef({}); // hand -> its trigger was held last frame
   const buttons = useRef({}); // hand -> { stickPress, primary, secondary } last frame
   const menuMode = useRef({}); // hand -> its stick works the panels
+  const pointedAt = useRef({}); // hand -> the control its ray was last on, "panel:id" (the lit one follows the ray as it moves)
   const focus = useRef({}); // hand -> { key, id }: what its stick has lit
   const steps = useRef({}); // `${hand}:${axis}` -> { dir, next }: a stick held over, stepping again
   const sliding = useRef({}); // hand -> the slider its stick moved (let go: its slideEnd)
@@ -265,7 +269,6 @@ export function useControllerGrips({
         o.scale.setScalar(size);
         o.rotation.y = turn;
         o.position.copy(sc.mid0).sub(mid);
-        o.position.y = 0; // (sideways only: your feet stay on the floor, the disc's top, at every size)
         o.updateMatrixWorld(true);
         _originInverse.copy(o.matrixWorld).invert();
         controllers = readControllers(frame, referenceSpace, o);
@@ -301,16 +304,23 @@ export function useControllerGrips({
       return hit?.object.userData.bodyId ?? null;
     };
 
-    /** The panel `c` points at or touches (nearest): { key, point (world), distance } or null. */
-    const panelAt = (c) => {
+    /** The panel `c`'s ray points at (nearest): { key, point (world), distance, id (the control there, or null) } or null. */
+    const panelPointed = (c) => {
       let best = null;
       raycaster.ray.copy(c.ray);
       raycaster.far = Infinity;
       for (const key of shownPanels()) {
-        const g = groupOf(key);
-        const hit = raycaster.intersectObject(g, true)[0];
-        if (hit && (!best || hit.distance < best.distance)) best = { key, point: hit.point.clone(), distance: hit.distance };
+        const hit = raycaster.intersectObject(groupOf(key), true)[0];
+        if (hit && (!best || hit.distance < best.hit.distance)) best = { key, hit };
       }
+      if (!best) return null;
+      const id = best.hit.object.userData.pick?.(best.hit) ?? null;
+      return { key: best.key, point: best.hit.point.clone(), distance: best.hit.distance, id: parseSlide(id)?.id ?? id };
+    };
+
+    /** The panel `c` points at or touches (nearest): { key, point (world), distance } or null. */
+    const panelAt = (c) => {
+      const best = panelPointed(c);
       if (best) return best;
       for (const key of shownPanels()) {
         const g = groupOf(key);
@@ -496,7 +506,7 @@ export function useControllerGrips({
       tap.tappedAt = -Infinity;
       tap.pressedAt = now;
       grabs.current[hand] = { target: 'none' };
-      // the probe on one of the selected object's stretching cubes (see Gizmo.jsx): stretching it, before anything
+      // the probe on one of the selected object's stretching cubes or turning cones (see Gizmo.jsx): stretching or turning it, before anything
       const handle = stretcher?.handleNear(controllerTip(c.rayMatrix, _tip), (PROBE_RADIUS + PROBE_REACH) * k);
       if (handle != null && stretcher.begin(handle, hand, _tip.clone())) {
         grabs.current[hand] = { target: 'stretch' };
@@ -590,6 +600,8 @@ export function useControllerGrips({
         return;
       }
       if (g?.target === 'body') {
+        // (its frame has it now: it stays where it's left, not back in this hand)
+        if (stretcher?.drag?.id === g.id && stretcher.drag.returnTo === hand) stretcher.drag.returnTo = null;
         holds.release(g.id, hand);
         return;
       }
@@ -673,8 +685,16 @@ export function useControllerGrips({
     for (const hand of HANDS) {
       const c = controllers[hand];
       const g = grabs.current[hand];
-      // (an object another hand or a pointer took away isn't this hand's any more)
-      if (g?.target === 'body' && !holds.isHeld(g.id, hand)) grabs.current[hand] = { target: 'none' };
+      // (an object another hand or a pointer took away isn't this hand's any more; but one its frame
+      // has, being stretched or turned, comes back to it: its grip waits, and takes it as it is then)
+      if (g?.target === 'body' && !holds.isHeld(g.id, hand)) {
+        if (stretcher?.drag?.id === g.id && stretcher.drag.returnTo === hand) g.paused = true;
+        else grabs.current[hand] = { target: 'none' };
+      } else if (g?.target === 'body' && g.paused && c) {
+        grabs.current[hand] = { ...bodyGrab(c, g.id), byRay: g.byRay }; // (held from where it is now; moved from next frame)
+        holding.current[hand] = true;
+        continue;
+      }
       holding.current[hand] = Boolean(c && g && g.target !== 'none');
       if (c && g?.target === 'stretch') {
         // the cube follows the probe, or the ray (along its axis)
@@ -785,6 +805,8 @@ export function useControllerGrips({
       }
       return 0;
     };
+    const pointing = {}; // hand -> the panel its ray is on: its stick works that panel, not the player
+    let stepped = false; // (a stick or B / Y moved the lit control, not the ray: that ticks)
     for (const hand of HANDS) {
       const c = controllers[hand];
       if (pressedNow(hand, 'stickPress')) {
@@ -793,21 +815,29 @@ export function useControllerGrips({
       }
       const probe = probes[hand]?.current;
       probe?.material.color.set(menuMode.current[hand] ? PROBE_MENU_COLOR : PROBE_COLOR);
-      if (!c || !menuMode.current[hand] || holding.current[hand]) {
-        if (!menuMode.current[hand]) focus.current[hand] = null;
+      const aimed = c && !holding.current[hand] ? panelPointed(c) : null;
+      pointing[hand] = aimed;
+      if (!c || holding.current[hand] || (!menuMode.current[hand] && !aimed)) {
+        focus.current[hand] = null;
+        pointedAt.current[hand] = null;
         continue;
       }
-      // the panels docked on this controller, top to bottom as they stand (or, none docked there, every one shown)
+      // pointed at a panel: that one; else (pressed in) the ones docked on this controller, top to bottom as they stand (none there: every one shown)
       const mine = DOCK_STACK.filter((key) => docks.current[key]?.on === hand && groupOf(key) && isShown(groupOf(key))).reverse();
-      const keys = mine.length ? mine : shownPanels();
+      const keys = aimed ? [aimed.key] : mine.length ? mine : shownPanels();
       const list = keys.flatMap((key) => (menus?.current[key] ? focusables(menus.current[key]).map((f) => ({ ...f, key })) : []));
       if (!list.length) continue;
+      // the ray moved onto another control: that one's lit, and the stick goes on from there
+      const ray = aimed?.id != null ? `${aimed.key}:${aimed.id}` : null;
+      if (ray && ray !== pointedAt.current[hand] && list.some((x) => x.key === aimed.key && x.id === aimed.id)) focus.current[hand] = { key: aimed.key, id: aimed.id };
+      pointedAt.current[hand] = ray;
       const f = focus.current[hand];
       let i = Math.max(0, list.findIndex((x) => x.key === f?.key && x.id === f?.id));
       const dy = step(hand, 'y', c.stick.y); // (down: on through the list)
       if (dy) {
         i = THREE.MathUtils.clamp(i + dy, 0, list.length - 1);
         buzz(hand, PULSE.zone);
+        stepped = true;
       }
       const at = list[i];
       const dx = step(hand, 'x', c.stick.x);
@@ -835,6 +865,7 @@ export function useControllerGrips({
         onSelect?.(at.parent);
         lit = { key: at.key, id: at.parent };
         buzz(hand, PULSE.detach);
+        stepped = true;
       }
       focus.current[hand] = { key: lit.key, id: lit.id };
     }
@@ -849,23 +880,22 @@ export function useControllerGrips({
     if (litKey !== reportedFocus.current) {
       reportedFocus.current = litKey;
       onFocus?.(lit);
+      if (stepped) playTick(); // (each step a stick takes through a panel ticks, as a press does; the ray moving doesn't)
     }
-    // moving, the way the left controller points (level), and turning about the head
+    // flying, the way the left controller points (up and down too; sideways stays level), and turning about the head
     const lc = controllers.left;
-    if (o && lc && !holding.current.left && !menuMode.current.left && (lc.stick.x || lc.stick.y)) {
-      const forward = _v.copy(lc.ray.direction).setY(0);
-      if (forward.lengthSq() > 1e-6) {
-        forward.normalize();
-        const right = _axis.crossVectors(forward, _up);
-        o.position.addScaledVector(forward, -lc.stick.y * MOVE_SPEED * dt * k).addScaledVector(right, lc.stick.x * MOVE_SPEED * dt * k);
-      }
+    if (o && lc && !holding.current.left && !menuMode.current.left && !pointing.left && (lc.stick.x || lc.stick.y)) {
+      const forward = _v.copy(lc.ray.direction);
+      const right = _axis.setFromMatrixColumn(lc.rayMatrix, 0).setY(0);
+      if (right.lengthSq() > 1e-6) right.normalize();
+      o.position.addScaledVector(forward, -lc.stick.y * MOVE_SPEED * dt * k).addScaledVector(right, lc.stick.x * MOVE_SPEED * dt * k);
     }
     const rc = controllers.right;
-    const rightFree = o && rc && !holding.current.right && !menuMode.current.right;
+    const rightFree = o && rc && !holding.current.right && !menuMode.current.right && !pointing.right;
     // (whichever way it's tilted more: a push a little off straight doesn't do both)
     if (rightFree && Math.abs(rc.stick.y) > Math.abs(rc.stick.x)) {
-      // pushed up: rising (stick y is negative up); down: sinking, no lower than the floor
-      o.position.y = Math.max(0, o.position.y - rc.stick.y * MOVE_SPEED * dt * k);
+      // pushed up: rising (stick y is negative up); down: sinking (below the floor too: free flight)
+      o.position.y -= rc.stick.y * MOVE_SPEED * dt * k;
     } else if (rightFree && rc.stick.x) {
       // (pushed right: turned right) about the head, so the view turns where it is
       const turn = -rc.stick.x * TURN_SPEED * dt;

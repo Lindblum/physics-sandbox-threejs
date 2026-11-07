@@ -538,24 +538,24 @@ export function XRPanel({ panel, onSelect, groupRef, focusKey }) {
       <mesh
         ref={mesh}
         position={[centre[0], centre[1], 0]}
+        userData={{ pick: gazePick }} // (the control a ray hit is on: the sticks start there, see Grab.jsx)
+        // (every pointer event on the panel is the panel's: none reach the scene behind it, threejs-ui)
         onPointerDown={(e) => {
+          e.stopPropagation();
           const key = pick(e);
           if (key === RESIZE) {
-            e.stopPropagation();
             startDrag(e, 'resize');
             return;
           }
           const slide = parseSlide(key);
           if (slide) {
             // pressed on a slider: set there, then follow the ray along the track
-            e.stopPropagation();
             select(key);
             startDrag(e, 'slider');
             if (drag.current) drag.current.slider = rects.find((q) => q.id === slide.id);
             return;
           }
           if (!bar || key !== SCROLL_TRACK) return;
-          e.stopPropagation();
           const [, py] = canvasPoint(e.uv);
           if (py < bar.thumb.y || py > bar.thumb.y + bar.thumb.h) {
             // the track either side of the thumb: a page toward the press
@@ -565,8 +565,10 @@ export function XRPanel({ panel, onSelect, groupRef, focusKey }) {
           startDrag(e, 'thumb');
         }}
         onPointerMove={(e) => {
+          e.stopPropagation();
           const d = drag.current;
-          if (d?.pointerId !== e.pointerId) return setPointerKey(pick(e));
+          // (not dragging, or another pointer; the camera moving re-runs hover with no pointerId)
+          if (!d || d.pointerId !== e.pointerId) return setPointerKey(pick(e));
           const at = rayPoint(e.ray);
           if (!at) return;
           if (d.kind === 'thumb') scrollTo(d.scroll + ((at.y - d.at.y) * scrollMax) / bar.travel);
@@ -581,8 +583,9 @@ export function XRPanel({ panel, onSelect, groupRef, focusKey }) {
             });
         }}
         onPointerUp={(e) => {
+          e.stopPropagation();
           const d = drag.current;
-          if (d?.pointerId !== e.pointerId) return;
+          if (!d || d.pointerId !== e.pointerId) return;
           e.target.releasePointerCapture?.(e.pointerId);
           drag.current = null;
           if (d.kind === 'slider' && d.slider) onSelect(slideEndId(d.slider.id));
@@ -594,11 +597,11 @@ export function XRPanel({ panel, onSelect, groupRef, focusKey }) {
           scrollTo(scrollTop + e.deltaY);
         }}
         onClick={(e) => {
-          const key = pick(e);
-          if (key == null) return;
           e.stopPropagation();
-          select(key);
+          const key = pick(e);
+          if (key != null) select(key);
         }}
+        onPointerOver={(e) => e.stopPropagation()}
       >
         <planeGeometry args={[width * PX_M, height * PX_M]} />
         {/* the front only (pressed from the front only too); alphaTest: the clear rest of the canvas draws nothing */}

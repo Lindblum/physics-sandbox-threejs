@@ -11,6 +11,8 @@
 //                            surfaces (ice slides on anything), bounce by their average, or by
 //                            restitution_combine (max: bouncy off anything)
 //   color ... clearcoat      how it looks (three.js's MeshPhysicalMaterial, and glTF for Blender)
+//   attenuation_color, attenuation_distance_m   a clear one's tint through its depth: light going
+//                            this far through it is left this colour (glass's green, ice's blue)
 //   emissive, emissive_intensity, emissive_pattern   its glow (pattern: only in its texture's hollows,
 //                            as lava glows through its cracks); light_cd: the light it casts (candela)
 //   luster                   the mineralogist's word for its shine (metallic, vitreous, resinous, ...)
@@ -39,6 +41,12 @@
 //                            about grain_count in a 10 cm cube's worth (cloth: in its sheet)
 //   particles, particle_rate, impact_particles   the particles it gives off all the time, how many
 //                            (× the preset's), and where struck (see particles.js)
+//   shader                   a look of its own instead of the table's (bubble: a soap film's swirling
+//                            thin-film colours, see Physics.jsx bubbleLook)
+//   pops                     yes: it bursts at the first touch of anything (a soap bubble; see Bubbles
+//                            in Physics.jsx), and a light breeze carries it
+//   spherical                yes: surface tension pulls it round, whatever shape it's made or stretched
+//                            into (a ball of the same volume: see shapes.js asSphere)
 //   the rest                 for simulations to come (heat, melting, fluids, sound in it)
 
 import table from './materials.csv?raw';
@@ -103,6 +111,9 @@ function material(row) {
     jiggle: n(row.jiggle, 0),
     particles: row.particles ? { preset: row.particles, rate: n(row.particle_rate, 1) } : null,
     impactParticles: row.impact_particles ?? null,
+    shader: row.shader ?? null,
+    pops: row.pops === 'yes',
+    spherical: row.spherical === 'yes',
     light: n(row.light_cd, 0),
     luster: row.luster,
     look: {
@@ -112,6 +123,8 @@ function material(row) {
       opacity: n(row.opacity, 1),
       transmission: n(row.transmission, 0),
       ior: n(row.ior, 1.5),
+      attenuationColor: row.attenuation_color ?? null,
+      attenuationDistance: n(row.attenuation_distance_m, Infinity),
       sheen: n(row.sheen, 0),
       clearcoat: n(row.clearcoat, 0),
       emissive: row.emissive ?? null,
@@ -174,8 +187,8 @@ export function materialKind(m) {
 /** Whether `m` may be made: `allowed` is { soft, jiggle, fluid, cloth, grains, particle }, each true unless switched off. */
 export const isAllowed = (m, allowed = {}) => allowed[materialKind(m)] !== false;
 
-/** A solid or liquid one at random (a gas would float away, a plasma hover), of those `allowed`. */
+/** A solid or liquid one at random (a gas would float away, a plasma hover, a bubble burst), of those `allowed`. */
 export function randomMaterial(allowed) {
-  const pick = MATERIALS.filter((m) => m.solid && m.gravityScale == null && !m.simulation && isAllowed(m, allowed));
+  const pick = MATERIALS.filter((m) => m.solid && m.gravityScale == null && !m.simulation && !m.pops && isAllowed(m, allowed));
   return pick[Math.floor(Math.random() * pick.length)];
 }

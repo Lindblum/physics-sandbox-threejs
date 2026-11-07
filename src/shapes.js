@@ -368,6 +368,24 @@ export const SHAPES = Object.fromEntries(
 
 export const shapeOf = (id) => SHAPES[id] ?? SHAPES.cube;
 
+/**
+ * Shape `id`, resized by `transform` (a 3×3, column-major, or none), pulled
+ * round by surface tension (a soap bubble): a ball of the same volume, as {
+ * shape: 'sphere', transform } (none at the ball's own size).
+ */
+export function asSphere(id, transform) {
+  const grown = transform ? Math.abs(new THREE.Matrix3().fromArray(transform).determinant()) : 1;
+  const s = Math.cbrt((shapeOf(id).volume * grown) / SHAPES.sphere.volume);
+  return { shape: 'sphere', transform: Math.abs(s - 1) < 1e-4 ? undefined : [s, 0, 0, 0, s, 0, 0, 0, s] };
+}
+
+/** `transform`'s scale if it only scales (the same every way, not turned), else null. */
+export function uniformScale(transform) {
+  const [a, b, c, d, e, f, g, h, i] = transform;
+  const off = Math.max(Math.abs(b), Math.abs(c), Math.abs(d), Math.abs(f), Math.abs(g), Math.abs(h));
+  return a > 0 && off < 1e-6 && Math.abs(e - a) < 1e-6 && Math.abs(i - a) < 1e-6 ? a : null;
+}
+
 /** How far `p` (in the shape's own space) is outside shape `id` (0 or less: inside it). */
 export function distanceOutside(id, p) {
   return shapeOf(id).distance(p);

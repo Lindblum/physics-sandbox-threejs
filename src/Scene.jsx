@@ -12,7 +12,7 @@ import { Probes, useControllerGrips } from './Grab.jsx';
 import { SOLID_BACKGROUND } from './menu.js';
 import { FramePacing } from './FramePacing.jsx';
 import { Physics, useRapier } from '@react-three/rapier';
-import { AirDrag, BounceThreshold, ContactSounds, Disc, GlowLights, Holds, MaterialLabels, Particles, SandboxBodies, makeBody, particles, setLookQuality, transformMatrix, withMade } from './Physics.jsx';
+import { AirDrag, BounceThreshold, Bubbles, ContactSounds, Disc, GlowLights, Holds, MaterialLabels, Particles, SandboxBodies, makeBody, particles, rounded, setLookQuality, transformMatrix, withMade } from './Physics.jsx';
 import { SHAPES, restingPosition, shapeOf, wireOf } from './shapes.js';
 import { AxisGizmo, Stretcher } from './Gizmo.jsx';
 import { materialById, randomMaterial } from './materials.js';
@@ -129,10 +129,66 @@ function Backdrop({ background }) {
  * highlights. With passthrough or a solid colour behind, the stars would look
  * wrong: a neutral studio instead. Display → Reflections off: nothing (only the
  * lights light them; faster).
+ *
+ * Reflections are live: a probe over the middle of the disc sees the scene
+ * itself (the objects, in their colours, and the disc) with that sky and
+ * studio round it, one of its six faces a frame, and what it saw becomes what
+ * everything reflects. So polished metal and glass mirror what's around them.
+ * (From one point: an object far from the middle sees things a little off.)
  */
+const PROBE = { size: 128, at: [0, 0.3, 0] }; // px a face; where it looks from (m)
+
 function Environment({ reflections, sky }) {
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
+  const base = useRef(null); // the sky and studio (a PMREM render target), round the live probe
+  const probe = useMemo(() => {
+    const target = new THREE.WebGLCubeRenderTarget(PROBE.size, { type: THREE.HalfFloatType });
+    const camera = new THREE.CubeCamera(0.01, 100, target);
+    camera.position.set(...PROBE.at);
+    camera.updateMatrixWorld(true);
+    return { target, camera, face: 0, pmrem: null, out: null };
+  }, []);
+  useEffect(
+    () => () => {
+      if (probe.out && scene.environment === probe.out.texture) scene.environment = null;
+      probe.target.dispose();
+      probe.out?.dispose();
+      probe.pmrem?.dispose();
+      probe.out = probe.pmrem = null;
+    },
+    [probe, scene],
+  );
+  // one face of the probe a frame (all six at once would stall a frame); after the sixth, the reflections are what it saw
+  useFrame(() => {
+    if (!reflections || !base.current) return;
+    const camera = probe.camera;
+    if (camera.coordinateSystem !== gl.coordinateSystem) {
+      camera.coordinateSystem = gl.coordinateSystem;
+      camera.updateCoordinateSystem();
+      camera.updateMatrixWorld(true);
+    }
+    const target0 = gl.getRenderTarget();
+    const face0 = gl.getActiveCubeFace();
+    const mip0 = gl.getActiveMipmapLevel();
+    const xr0 = gl.xr.enabled;
+    const { background, backgroundIntensity, backgroundBlurriness } = scene;
+    // (round it, the sky and studio as reflected, not the dim stars behind)
+    scene.background = base.current.texture;
+    scene.backgroundIntensity = 1;
+    scene.backgroundBlurriness = 0;
+    gl.xr.enabled = false;
+    gl.setRenderTarget(probe.target, probe.face);
+    gl.render(scene, camera.children[probe.face]);
+    gl.xr.enabled = xr0;
+    gl.setRenderTarget(target0, face0, mip0);
+    Object.assign(scene, { background, backgroundIntensity, backgroundBlurriness });
+    probe.face = (probe.face + 1) % 6;
+    if (probe.face) return;
+    probe.pmrem ??= new THREE.PMREMGenerator(gl);
+    probe.out = probe.pmrem.fromCubemap(probe.target.texture, probe.out);
+    scene.environment = probe.out.texture;
+  });
   // (made and disposed in the one effect: made in a memo, React's dev double run would dispose it and keep using it)
   useEffect(() => {
     if (!reflections) return;
@@ -155,7 +211,9 @@ function Environment({ reflections, sky }) {
       room.dispose();
       pmrem.dispose();
       texture?.dispose();
-      scene.environment = target.texture;
+      base.current = target;
+      probe.face = 0;
+      scene.environment = target.texture; // (till the live probe has seen all round)
       scene.environmentIntensity = texture ? SKY_ENVIRONMENT_INTENSITY : ENVIRONMENT_INTENSITY;
     };
     if (sky)
@@ -172,10 +230,12 @@ function Environment({ reflections, sky }) {
     else make(null);
     return () => {
       gone = true;
-      if (target && scene.environment === target.texture) scene.environment = null;
+      base.current = null;
+      // (reflections off, or the sky changed: no reflections till they're made again)
+      if (scene.environment && (scene.environment === target?.texture || scene.environment === probe.out?.texture)) scene.environment = null;
       target?.dispose();
     };
-  }, [gl, scene, reflections, sky]);
+  }, [gl, scene, reflections, sky, probe]);
   return null;
 }
 
@@ -346,8 +406,9 @@ const toolPointer = (e) => !e.internalPointer || e.pointerType === 'ray';
  * 'random'), transform?, name? }, or null with another tool (or nothing copied).
  */
 function placingSpec(tool, material, clip) {
-  if (SHAPES[tool]) return { shape: tool, material };
-  return tool === 'paste' ? clip : null;
+  const spec = SHAPES[tool] ? { shape: tool, material } : tool === 'paste' ? clip : null;
+  // (a soap bubble: the ball surface tension makes of it, so its wireframe shows that)
+  return spec && spec.material !== 'random' ? rounded(spec) : spec;
 }
 
 const _yaw = new THREE.Quaternion();
@@ -471,7 +532,7 @@ function useTools({ tool, material, allowed, clip, setClip, registry, bodies, ho
     },
     onPointerMove: (e) => {
       const d = drag.current;
-      if (d?.pointerId === e.pointerId) d.ray.copy(e.ray);
+      if (d && d.pointerId === e.pointerId) d.ray.copy(e.ray); // (the camera moving re-runs hover with no pointerId: not a drag's)
       showPreview(e);
     },
     onPointerUp: (e) => {
@@ -582,7 +643,8 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   const holds = useMemo(() => new Holds(registry), [registry]);
   if (import.meta.env.DEV) window.__registry = registry; // (for tests)
   // an object resized with both hands keeps its new size (see Grab.jsx)
-  const onResize = (id, transform) => setBodies((list) => list.map((b) => (b.id === id ? { ...b, transform } : b)));
+  // (a soap bubble stretched or squashed: surface tension pulls it round again, a ball of its new volume)
+  const onResize = (id, transform) => setBodies((list) => list.map((b) => (b.id === id ? rounded({ ...b, transform }) : b)));
   // the shapes' and Paste's wireframes: the mouse's, and each controller's
   const mousePreview = useRef(null);
   const leftPreview = useRef(null);
@@ -657,6 +719,7 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
         <Disc colliderRef={discCollider} meshRef={discMesh} handlers={discHandlers} />
         <SandboxBodies bodies={bodies} setBodies={setBodies} registry={registry} holds={holds} handlers={handlers} />
         <AirDrag registry={registry} />
+        <Bubbles registry={registry} setBodies={setBodies} holds={holds} />
         <BounceThreshold registry={registry} />
         <ContactSounds registry={registry} disc={discCollider} holds={holds} onDeform={onResize} />
         <Fluids

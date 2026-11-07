@@ -160,7 +160,7 @@ export function useGrainPointer(id, grabs, pointed) {
       if (controls) controls.enabled = false;
     },
     onPointerMove: (e) => {
-      if (drag.current?.pointerId === e.pointerId) drag.current.ray.copy(e.ray);
+      if (drag.current && drag.current.pointerId === e.pointerId) drag.current.ray.copy(e.ray); // (the camera moving re-runs hover with no pointerId)
     },
     onPointerUp: letGo,
     onPointerCancel: letGo,

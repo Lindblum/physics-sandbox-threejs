@@ -205,6 +205,50 @@ export function impact(material, size, speed, mass, at) {
 }
 
 /**
+ * A soap bubble `size` m across bursting at `at`: a soft, bright click (its
+ * film snapping back), higher the smaller, and a breath of air let out.
+ */
+export function pop(at, size) {
+  const c = running();
+  if (!c || impacts >= MAX_IMPACTS) return;
+  const t = c.currentTime + 0.003;
+  const out = panner(at);
+  const small = Math.min(3, Math.max(0.5, REF_SIZE / size));
+  // the click: noise through a band round a few kHz, over in a few ms
+  const click = c.createBufferSource();
+  click.buffer = noise;
+  const band = c.createBiquadFilter();
+  band.type = 'bandpass';
+  band.frequency.value = 2600 * small * (1 + (Math.random() - 0.5) * 0.2);
+  band.Q.value = 1.2;
+  const g = c.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.35, t + 0.0008);
+  g.gain.setTargetAtTime(0, t + 0.0008, 0.004);
+  click.connect(band).connect(g).connect(out);
+  click.start(t, Math.random() * 1.5);
+  click.stop(t + 0.04);
+  // the breath: a quiet, low puff just after
+  const puff = c.createBufferSource();
+  puff.buffer = noise;
+  const low = c.createBiquadFilter();
+  low.type = 'lowpass';
+  low.frequency.value = 700;
+  const pg = c.createGain();
+  pg.gain.setValueAtTime(0, t);
+  pg.gain.linearRampToValueAtTime(0.06, t + 0.004);
+  pg.gain.setTargetAtTime(0, t + 0.004, 0.015);
+  puff.connect(low).connect(pg).connect(out);
+  puff.start(t, Math.random() * 1.5);
+  puff.stop(t + 0.1);
+  impacts++;
+  setTimeout(() => {
+    impacts--;
+    out.disconnect();
+  }, 250);
+}
+
+/**
  * Two things touching, `key` naming the pair (the same each step): sliding
  * past each other at `slide` m/s, a ball rolling at `roll` m/s, pressed
  * together with `force` N, at `at`. Silent unless told again within SCRAPE_HOLD.

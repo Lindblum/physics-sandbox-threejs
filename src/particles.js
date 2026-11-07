@@ -29,6 +29,8 @@ const PRESETS = {
   // dander: tiny flakes fluttering, slowly settling on the floor
   dander: { rate: 25, life: [5, 9], size: [0.004, 0.004], speed: 0.04, gravity: 0.004, drag: 2, wander: 0.4, colors: ['material'], alpha: 0.9, glow: false, floor: true },
   splash: { rate: 0, life: [0.35, 0.8], size: [0.01, 0.004], speed: 0.9, gravity: 1, drag: 0.3, colors: ['material'], alpha: 0.85, glow: false },
+  // a soap bubble bursting: its film flung out as fine droplets that soon slow and fall (see pop)
+  film: { rate: 0, life: [0.25, 0.6], size: [0.005, 0.002], speed: 1.4, gravity: 1, drag: 4, colors: ['#f4f8ff', '#d8e6ff'], alpha: 0.7, glow: false },
 };
 
 const MAX = 3000; // particles per batch
@@ -228,6 +230,20 @@ export class ParticleSystem {
     if (!name || speed < 0.4) return;
     const count = Math.min(40, Math.round(speed * 10 * this.density));
     for (let i = 0; i < count; i++) this.spawn(name, material, at, Math.min(2, 0.5 + speed * 0.3));
+  }
+
+  /** A soap bubble of `radius` m bursting at `center`: droplets from all over its film, flung outward (more, the bigger). */
+  pop(center, radius) {
+    const preset = PRESETS.film;
+    const count = Math.round(Math.min(120, Math.max(8, 30 * (radius / 0.05) ** 2)) * this.density);
+    const props = { rise: 0, gravity: preset.gravity, drag: preset.drag, alpha: preset.alpha, floor: false, wander: 0 };
+    const colors = presetColors(preset, null);
+    for (let i = 0; i < count; i++) {
+      _dir.randomDirection();
+      const s = preset.speed * rand(0.4, 1);
+      const at = [center.x + _dir.x * radius, center.y + _dir.y * radius, center.z + _dir.z * radius];
+      this.plain.add(at, [_dir.x * s, _dir.y * s, _dir.z * s], rand(...preset.life), preset.size, colors, props);
+    }
   }
 
   forget(key) {

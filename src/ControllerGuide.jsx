@@ -19,14 +19,14 @@ const TEXTS = {
   left: {
     'xr-standard-trigger': TRIGGER,
     'xr-standard-squeeze': GRIP,
-    'xr-standard-thumbstick': 'Move (where it points)\nPress: this hand\'s menus / back\nGripping: push / pull, roll',
+    'xr-standard-thumbstick': 'Fly (where it points)\nOn a menu: step through it\nPress: this hand\'s menus / back\nGripping: push / pull, roll',
     'x-button': 'In menus: choose',
     'y-button': 'In menus: back a level',
   },
   right: {
     'xr-standard-trigger': TRIGGER,
     'xr-standard-squeeze': GRIP,
-    'xr-standard-thumbstick': 'Turn; up / down: rise, sink\nPress: this hand\'s menus / back\nGripping: push / pull, roll',
+    'xr-standard-thumbstick': 'Turn; up / down: rise, sink\nOn a menu: step through it\nPress: this hand\'s menus / back\nGripping: push / pull, roll',
     'a-button': 'In menus: choose',
     'b-button': 'In menus: back a level',
   },

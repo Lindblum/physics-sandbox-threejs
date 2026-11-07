@@ -14,12 +14,12 @@ import {
 } from '@react-three/rapier';
 import * as THREE from 'three';
 import { AIR_DENSITY, DISC_MATERIAL, STARTING_MATERIALS, materialById } from './materials.js';
-import { CUBE_SIZE, CYLINDER, SPHERE_RADIUS, shapeOf, transformedShape } from './shapes.js';
+import { CUBE_SIZE, CYLINDER, SPHERE_RADIUS, asSphere, shapeOf, transformedShape, uniformScale } from './shapes.js';
 import { pulseHand } from './grip.js';
 import { grainHolds, pourCentre, pourMass, pours } from './grains.js';
 import { materialMaps } from './textures.js';
 import { ParticleSystem } from './particles.js';
-import { impact, scrape, setListener, updateSounds } from './sound.js';
+import { impact, pop, scrape, setListener, updateSounds } from './sound.js';
 
 export { CUBE_SIZE, SPHERE_RADIUS };
 
@@ -36,7 +36,10 @@ export { CUBE_SIZE, SPHERE_RADIUS };
 // rises. Gases and plasmas don't collide with anything. Where things strike or
 // slide on each other they sound like what they're made of (see sound.js), and
 // some throw up particles (see particles.js); some give them off all the time,
-// some glow and light what's around them, some wobble when struck.
+// some glow and light what's around them, some wobble when struck. A soap
+// bubble is a ball whatever shape it's made (surface tension), barely heavier
+// than the air, so it drifts slowly down on a light breeze, and it bursts at
+// the first touch of anything (see Bubbles).
 //
 // An object held (by a grip, or dragged with the Select tool) is kinematic: it
 // goes where the hand puts it, shoving others aside, and let go it carries on
@@ -70,12 +73,23 @@ let nextId = 1;
  * A new object: { id, shape (see shapes.js), material (id), position,
  * rotation (Euler XYZ), start (one of the first ten), linvel?, angvel?,
  * transform? (a 3×3 matrix, column-major, on the shape's own space: it's been
- * resized or stretched, see Grab.jsx) }.
+ * resized or stretched, see Grab.jsx) }. Of a spherical material (a soap
+ * bubble), a ball of the same volume, whatever shape was asked for.
  */
 export function makeBody(shape, material, position, rotation = [0, Math.random() * Math.PI * 2, 0], start = false, motion = {}) {
+  const m = materialById(material);
   // (a material made of grains, a soft body or cloth is always simulated so: see Fluids.jsx)
-  const fluid = materialById(material).simulation ? { fluid: true } : {};
-  return { id: nextId++, shape, material, position, rotation, start, ...fluid, ...motion };
+  const fluid = m.simulation ? { fluid: true } : {};
+  const def = { id: nextId++, shape, material, position, rotation, start, ...fluid, ...motion };
+  return m.spherical ? rounded(def) : def;
+}
+
+/** Object `def`, of a spherical material (a soap bubble), pulled round: a ball of its volume (others as they are). */
+export function rounded(def) {
+  if (!materialById(def.material).spherical) return def;
+  const { shape, transform } = asSphere(def.shape, def.transform);
+  const { transform: _, ...rest } = def;
+  return { ...rest, shape, ...(transform && { transform }) };
 }
 
 /** The first ten: a cube of each starting material, at random places on the disc, apart from each other. */
@@ -143,6 +157,7 @@ export const onLooksChanged = (f) => lookListeners.add(f);
  * scene); without it the table's opacity stands in (far cheaper).
  */
 export function lookMaterial(material, { variant = 0, transmission = lookQuality.refraction, detail = lookQuality.surfaceDetail } = {}) {
+  if (material.shader === 'bubble') return bubbleLook(material);
   const l = material.look;
   const transparent = l.opacity < 1;
   const look = new THREE.MeshPhysicalMaterial({
@@ -182,10 +197,90 @@ export function lookMaterial(material, { variant = 0, transmission = lookQuality
     if (maps?.emissiveMap) look.emissiveMap = maps.emissiveMap;
   }
   if (transmission && l.transmission > 0) {
-    // (thick enough to bend what's behind it, as a 10 cm object does)
-    Object.assign(look, { transmission: l.transmission, thickness: 0.05 });
-  }
-  else if (transparent) Object.assign(look, { transparent, opacity: l.opacity, depthWrite: false });
+    // (thick enough to bend what's behind it, as a 10 cm object does; tinted through its depth, glass green, ice blue)
+    Object.assign(look, { transmission: l.transmission, thickness: 0.08 });
+    if (l.attenuationColor) Object.assign(look, { attenuationColor: new THREE.Color(l.attenuationColor), attenuationDistance: l.attenuationDistance });
+  } else if (transparent && l.transmission > 0) {
+    // a clear one without Refraction (and in XR): its opacity dims what's behind it, but not what it mirrors,
+    // which stays full strength, as on real glass (mixed by opacity, it would fade too); of its own colour,
+    // only what light passing through doesn't make up for (clear glass shows none: lit, it would look milky)
+    look.color.multiplyScalar(l.opacity * (1 - l.transmission));
+    Object.assign(look, {
+      transparent,
+      opacity: l.opacity,
+      depthWrite: false,
+      blending: THREE.CustomBlending,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
+    });
+  } else if (transparent) Object.assign(look, { transparent, opacity: l.opacity, depthWrite: false });
+  return look;
+}
+
+/** How long (s) the soap films have been flowing: their swirls move on with it (see SandboxBodies). */
+const filmTime = { value: 0 };
+const FILM_NM = [80, 950]; // the film's thinnest and thickest, nm (its colours come from this)
+
+/**
+ * A soap bubble's look: a film so thin it shows nothing of its own, only what
+ * it mirrors, coloured by thin-film interference (three.js's iridescence), the
+ * colours swirling as the film flows and banded by its thickness, thinner
+ * toward the top where it drains (darker there: too thin to colour).
+ * The film's reflection is added onto what's behind it, which shows through
+ * almost untouched (opacity: how much it dims it); both its sides show.
+ */
+function bubbleLook(material) {
+  const l = material.look;
+  const look = new THREE.MeshPhysicalMaterial({
+    name: material.name,
+    color: '#000000', // (no colour of its own: what it reflects is all there is)
+    roughness: l.roughness,
+    metalness: 0,
+    ior: l.ior,
+    specularIntensity: Math.min(1, l.reflectance * 2),
+    envMapIntensity: 3, // (a film mirrors only a few percent: brightened, so its colours read as they do to the eye)
+    iridescence: 1,
+    iridescenceIOR: l.ior,
+    iridescenceThicknessRange: FILM_NM,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: l.opacity,
+    depthWrite: false,
+    // added onto the scene (not mixed by its opacity, which would fade the reflections too), dimming it by its opacity
+    blending: THREE.CustomBlending,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneMinusSrcAlphaFactor,
+  });
+  look.onBeforeCompile = (shader) => {
+    shader.uniforms.filmTime = filmTime;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vFilmLocal;\nvarying vec3 vFilmWorld;')
+      .replace(
+        '#include <begin_vertex>',
+        // (where on the bubble, in its own space, and which way that faces in the world)
+        '#include <begin_vertex>\nvFilmLocal = transformed;\nvFilmWorld = mat3( modelMatrix ) * transformed;',
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float filmTime;\nvarying vec3 vFilmLocal;\nvarying vec3 vFilmWorld;')
+      .replace(
+        '#include <lights_physical_fragment>',
+        /* glsl */ `#include <lights_physical_fragment>
+        #ifdef USE_IRIDESCENCE
+        {
+          vec3 p = normalize( vFilmLocal );
+          float t = filmTime;
+          // the film flowing: bands that wind and swirl round the bubble, slowly
+          float swirl = sin( p.x * 5.0 + t * 0.50 + 1.7 * sin( p.y * 4.0 - t * 0.37 ) )
+                      + sin( p.y * 6.0 - t * 0.43 + 1.5 * sin( p.z * 5.0 + t * 0.29 ) )
+                      + sin( p.z * 7.0 + t * 0.61 + 1.3 * sin( p.x * 6.0 - t * 0.33 ) );
+          // drained toward the top (the world's), pooled thicker at the bottom
+          float drain = mix( 1.35, 0.3, smoothstep( -1.0, 1.0, normalize( vFilmWorld ).y ) );
+          material.iridescenceThickness = clamp( ( 430.0 + 130.0 * swirl ) * drain, ${FILM_NM[0].toFixed(1)}, ${FILM_NM[1].toFixed(1)} );
+        }
+        #endif`,
+      );
+  };
+  look.customProgramCacheKey = () => 'soap-film';
   return look;
 }
 
@@ -269,6 +364,8 @@ export class Holds {
         this.map.delete(id);
         continue;
       }
+      // (held is kinematic, whatever else may have set its body since)
+      if (body.bodyType() !== KINEMATIC) body.setBodyType(KINEMATIC, true);
       // (not into the floor: held, it would pass through, and let go there, stick in it)
       const entry = this.registry.get(id);
       const geometry = entry.mesh.current?.geometry;
@@ -339,6 +436,9 @@ export function Disc({ onClick, colliderRef, meshRef, handlers }) {
 /** A shape's collider(s), resized by `transform` if it has one, with `surface`'s friction, bounce and density (`ref`: the first). */
 function Colliders({ shape, transform, surface }) {
   const hulls = (pieces) => pieces.map((points, i) => <ConvexHullCollider key={i} args={[points]} {...surface} ref={i === 0 ? surface.ref : undefined} />);
+  // (a ball only made bigger or smaller, a soap bubble's say: still a true ball)
+  const scale = shape.id === 'sphere' && transform ? uniformScale(transform) : null;
+  if (scale) return <BallCollider args={[SPHERE_RADIUS * scale]} {...surface} />;
   if (transform) return hulls(transformedShape(shape.id, transform).pieces);
   if (shape.id === 'cube') return <CuboidCollider args={[CUBE_SIZE / 2, CUBE_SIZE / 2, CUBE_SIZE / 2]} {...surface} />;
   if (shape.id === 'sphere') return <BallCollider args={[SPHERE_RADIUS]} {...surface} />;
@@ -440,6 +540,7 @@ export function SandboxBodies({ bodies, setBodies, registry, holds, handlers }) 
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.1);
     holds.step(dt);
+    filmTime.value += dt; // (the soap films flow on)
     let fallen = null;
     for (const [id, entry] of registry) {
       const b = entry.body.current;
@@ -492,6 +593,79 @@ export function AirDrag({ registry }) {
       const k = -impulse / speed;
       b.applyImpulse({ x: v.x * k, y: v.y * k, z: v.z * k }, false);
     }
+  });
+  return null;
+}
+
+// soap bubbles
+const BREEZE = 0.12; // m/s²: the air's gentle stirring, which carries them about
+// what one is next to as it's made (resting on it, or a hair above, settling onto it slowly at its
+// slight weight) doesn't burst it, until it's moved clear of it
+const BUBBLE_BORN_S = 0.1;
+const _breeze = new THREE.Vector3();
+
+/**
+ * The soap bubbles (materials that `pops`): before each step a light, slowly
+ * changing breeze nudges each one in the air (its own, by its id), and after
+ * it, any one touching something it wasn't touching when made bursts (one made
+ * resting on something sits there, till it's moved off). It's gone, its
+ * film flung out as a spray of droplets, with a pop (and a buzz in a hand
+ * holding it). `setBodies` updates the list; `holds`: who holds what.
+ */
+export function Bubbles({ registry, setBodies, holds }) {
+  const { world } = useRapier();
+  const clock = useRef(0);
+  useBeforePhysicsStep((w) => {
+    clock.current += w.timestep;
+    const t = clock.current;
+    for (const e of registry.values()) {
+      const b = e.body.current;
+      // (not one sitting where it was made: it stays there till something moves it)
+      if (!e.material.pops || !b?.isDynamic() || b.isSleeping() || e.film?.touched.size) continue;
+      const k = e.def.id * 1.618;
+      _breeze
+        .set(Math.sin(t * 0.7 + k) + 0.5 * Math.sin(t * 1.9 + k * 2.1), 0.6 * Math.sin(t * 0.5 + k * 0.7), Math.cos(t * 0.8 + k * 1.7) + 0.5 * Math.sin(t * 1.3 + k))
+        .multiplyScalar(BREEZE * b.mass() * w.timestep);
+      b.applyImpulse(_breeze, false);
+    }
+  });
+  useAfterPhysicsStep((w) => {
+    let popped = null;
+    for (const [id, e] of registry) {
+      const b = e.body.current;
+      if (!e.material.pops || !b) continue;
+      // what it's next to (their bounds overlap), and of those what it touches (any part of anything: the disc, objects, grains)
+      const near = new Set();
+      const touching = new Set();
+      for (let i = 0; i < b.numColliders(); i++) {
+        const c = b.collider(i);
+        world.contactPairsWith(c, (other) => {
+          near.add(other.handle);
+          world.contactPair(c, other, (manifold) => {
+            if (manifold.numSolverContacts() > 0) touching.add(other.handle);
+          });
+        });
+      }
+      const film = (e.film ??= { age: 0, touched: new Set() });
+      film.age += w.timestep;
+      if (film.age <= BUBBLE_BORN_S) {
+        for (const h of near) film.touched.add(h);
+        continue;
+      }
+      // (what it was made next to no longer counts once it's moved clear of it)
+      for (const h of film.touched) if (!near.has(h)) film.touched.delete(h);
+      if ([...touching].some((h) => !film.touched.has(h))) (popped ??= new Map()).set(id, e);
+    }
+    if (!popped) return;
+    for (const [id, e] of popped) {
+      const at = _v.copy(e.body.current.translation());
+      const radius = e.measure.radius;
+      particles.pop(at, radius);
+      pop(at, radius * 2);
+      for (const hand of holds.handsOf(id)) pulseHand(hand, 0.25, 15);
+      registry.delete(id); // (not again next step, before React catches up)
+    }
+    setBodies((list) => list.filter((d) => !popped.has(d.id)));
   });
   return null;
 }
