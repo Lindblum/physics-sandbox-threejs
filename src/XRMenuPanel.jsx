@@ -534,7 +534,8 @@ export function XRPanel({ panel, onSelect, groupRef, focusKey }) {
     button: centre[0] - (width / 2) * PX_M + (PAD + TOGGLE / 2) * PX_M,
   };
   return (
-    <group ref={groupRef} userData={{ bounds }}>
+    // (a thumbstick on a controller pointing at the panel scrolls it, see Grab.jsx: by `dy` canvas px)
+    <group ref={groupRef} userData={{ bounds, scrollBy: (dy) => bar && scrollTo(scrollTop + dy) }}>
       <mesh
         ref={mesh}
         position={[centre[0], centre[1], 0]}

@@ -501,7 +501,8 @@ function SandboxBody({ def, registry, handlers }) {
       gravityScale={material.gravityScale ?? 1 - AIR_DENSITY / material.density}
       linearDamping={material.damping}
       angularDamping={material.damping}
-      canSleep
+      // (not a soap bubble: drifting down slower than Rapier's sleep threshold, it would stop dead in mid-air)
+      canSleep={!material.pops}
     >
       <Colliders shape={shape} transform={def.transform} surface={surface} />
       <mesh
@@ -602,26 +603,33 @@ const BREEZE = 0.12; // m/s²: the air's gentle stirring, which carries them abo
 // what one is next to as it's made (resting on it, or a hair above, settling onto it slowly at its
 // slight weight) doesn't burst it, until it's moved clear of it
 const BUBBLE_BORN_S = 0.1;
+const BUBBLE_BOND_BREAK_M = 0.015; // two bubbles stuck together come apart pulled this far out of place
 const _breeze = new THREE.Vector3();
+const BUBBLE_FILM = { pops: true, bubbleSafe: true }; // what a burst bubble's leftovers count as, for a moment
 
 /**
  * The soap bubbles (materials that `pops`): before each step a light, slowly
  * changing breeze nudges each one in the air (its own, by its id), and after
- * it, any one touching something it wasn't touching when made bursts (one made
- * resting on something sits there, till it's moved off). It's gone, its
- * film flung out as a spray of droplets, with a pop (and a buzz in a hand
- * holding it). `setBodies` updates the list; `holds`: who holds what.
+ * it, any one touching something it wasn't touching when made bursts, unless
+ * that's bubble_safe (wet things, soft fibres, other bubbles: see
+ * materials.js). One made resting on something sits there, till it's moved
+ * off. Burst, it's gone, its film flung out as a spray of droplets, with a pop
+ * (and a buzz in a hand holding it). Two bubbles that touch stick together
+ * where they meet, as foam does, and come apart only pulled. `setBodies`
+ * updates the list; `holds`: who holds what.
  */
 export function Bubbles({ registry, setBodies, holds }) {
-  const { world } = useRapier();
+  const { world, rapier } = useRapier();
   const clock = useRef(0);
+  const bonds = useMemo(() => new Map(), []); // "id:id" -> { joint, b1, b2, a1, a2 }
+  const burst = useMemo(() => new Map(), []); // a burst bubble's collider handle -> when (s): still a bubble, so what it was stuck to doesn't burst on what's left of it
   useBeforePhysicsStep((w) => {
     clock.current += w.timestep;
     const t = clock.current;
     for (const e of registry.values()) {
       const b = e.body.current;
-      // (not one sitting where it was made: it stays there till something moves it)
-      if (!e.material.pops || !b?.isDynamic() || b.isSleeping() || e.film?.touched.size) continue;
+      // (only in the air: not one sitting where it was made, or on something wet, which stays there till something moves it)
+      if (!e.material.pops || !b?.isDynamic() || b.isSleeping() || e.film?.touched.size || e.film?.resting) continue;
       const k = e.def.id * 1.618;
       _breeze
         .set(Math.sin(t * 0.7 + k) + 0.5 * Math.sin(t * 1.9 + k * 2.1), 0.6 * Math.sin(t * 0.5 + k * 0.7), Math.cos(t * 0.8 + k * 1.7) + 0.5 * Math.sin(t * 1.3 + k))
@@ -630,6 +638,28 @@ export function Bubbles({ registry, setBodies, holds }) {
     }
   });
   useAfterPhysicsStep((w) => {
+    // bubbles stuck together: apart once pulled far enough (or one's gone)
+    for (const [key, bond] of bonds) {
+      const gone = !world.bodies.contains(bond.b1.handle) || !world.bodies.contains(bond.b2.handle) || !world.impulseJoints.contains(bond.joint.handle);
+      if (!gone) {
+        _p1.copy(bond.a1).applyQuaternion(_qa.copy(bond.b1.rotation())).add(bond.b1.translation());
+        _p2.copy(bond.a2).applyQuaternion(_qb.copy(bond.b2.rotation())).add(bond.b2.translation());
+        if (_p1.distanceTo(_p2) < BUBBLE_BOND_BREAK_M) continue;
+        world.removeImpulseJoint(bond.joint, true);
+      }
+      bonds.delete(key);
+    }
+    // what each collider is: { id, material } (objects, and the grains of liquids, sand, cloth and soft bodies; the disc isn't here, and bursts them)
+    const whose = new Map();
+    for (const e of registry.values()) {
+      const b = e.body.current;
+      if (b) for (let i = 0; i < b.numColliders(); i++) whose.set(b.collider(i).handle, { id: e.def.id, material: e.material, body: b });
+    }
+    for (const pour of pours.values()) for (const g of pour.bodies) for (let i = 0; i < g.numColliders(); i++) whose.set(g.collider(i).handle, { material: pour.material });
+    for (const [h, when] of burst) {
+      if (clock.current - when > 1) burst.delete(h);
+      else if (!whose.has(h)) whose.set(h, { material: BUBBLE_FILM });
+    }
     let popped = null;
     for (const [id, e] of registry) {
       const b = e.body.current;
@@ -637,12 +667,27 @@ export function Bubbles({ registry, setBodies, holds }) {
       // what it's next to (their bounds overlap), and of those what it touches (any part of anything: the disc, objects, grains)
       const near = new Set();
       const touching = new Set();
+      let onSomething = false; // (touching something other than bubbles)
       for (let i = 0; i < b.numColliders(); i++) {
         const c = b.collider(i);
         world.contactPairsWith(c, (other) => {
           near.add(other.handle);
           world.contactPair(c, other, (manifold) => {
-            if (manifold.numSolverContacts() > 0) touching.add(other.handle);
+            if (!manifold.numSolverContacts()) return;
+            const it = whose.get(other.handle);
+            // another bubble: they stick together where they meet (each pair once)
+            if (it?.material.pops && it.body && id < it.id && !bonds.has(`${id}:${it.id}`)) {
+              const p = manifold.solverContactPoint(0);
+              _a.set(p.x, p.y, p.z);
+              const a1 = localPoint(b, _a);
+              const a2 = localPoint(it.body, _a);
+              const turn = _qa.copy(b.rotation()).premultiply(_qb.copy(it.body.rotation()).invert()).clone();
+              const joint = world.createImpulseJoint(rapier.JointData.fixed(a1, { x: 0, y: 0, z: 0, w: 1 }, a2, turn), b, it.body, true);
+              bonds.set(`${id}:${it.id}`, { joint, b1: b, b2: it.body, a1, a2 });
+            }
+            // (wet things, soft fibres and bubbles don't burst it)
+            if (!it?.material.bubbleSafe) touching.add(other.handle);
+            if (!it?.material.pops) onSomething = true;
           });
         });
       }
@@ -655,10 +700,23 @@ export function Bubbles({ registry, setBodies, holds }) {
       // (what it was made next to no longer counts once it's moved clear of it)
       for (const h of film.touched) if (!near.has(h)) film.touched.delete(h);
       if ([...touching].some((h) => !film.touched.has(h))) (popped ??= new Map()).set(id, e);
+      // (resting on something it doesn't burst on, wet ice say: it stays there, the breeze doesn't slide it off)
+      film.resting = onSomething;
     }
     if (!popped) return;
     for (const [id, e] of popped) {
-      const at = _v.copy(e.body.current.translation());
+      const b = e.body.current;
+      // (gone at once, for the physics too: till React takes its body away, a bubble stuck to it would touch what's left and burst)
+      for (let i = 0; i < b.numColliders(); i++) {
+        b.collider(i).setEnabled(false);
+        burst.set(b.collider(i).handle, clock.current);
+      }
+      for (const [key, bond] of bonds)
+        if (bond.b1 === b || bond.b2 === b) {
+          if (world.impulseJoints.contains(bond.joint.handle)) world.removeImpulseJoint(bond.joint, true);
+          bonds.delete(key);
+        }
+      const at = _v.copy(b.translation());
       const radius = e.measure.radius;
       particles.pop(at, radius);
       pop(at, radius * 2);

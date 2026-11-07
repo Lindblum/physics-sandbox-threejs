@@ -34,8 +34,11 @@ import { playTick } from './sound.js';
 // The sticks: free flight. The left flies the player the way the left
 // controller points (up and down too; sideways stays level), the right turns
 // them about their head, or (up / down) raises and lowers them.
-// A controller whose ray is on a panel works that panel with its stick
-// instead (threejs-ui): nothing moves or turns meanwhile; the lit control
+// While a controller's ray is on a panel, two sticks work it instead
+// (threejs-ui), and nothing moves or turns meanwhile. The pointing
+// controller's scrolls it (up and down). The stick of the controller the
+// panel is docked on (or, a panel not docked there, the other controller's)
+// steps through it: the lit control
 // starts at the one pointed at (and jumps to it again whenever the ray moves
 // onto another), up and down go through its buttons, settings and choices
 // (left and right set a slider), A / X presses the one lit, B / Y goes up a
@@ -116,6 +119,7 @@ export const SCENE_SCALE = { min: 0.05, max: 20 }; // how small and big the scen
 // the sticks
 const MOVE_SPEED = 1.5; // m/s at full tilt (at the player's size)
 const TURN_SPEED = 1.5; // rad/s at full tilt
+const MENU_SCROLL_SPEED = 1400; // canvas px a second at full tilt: a pointing controller's stick scrolling the panel
 const MENU_TILT = 0.6; // a stick tilted this far steps through a panel...
 const MENU_REPEAT = [0.4, 0.12]; // ...again after this long held, then this often
 export const PROBE_MENU_COLOR = '#3a8dde'; // a probe whose stick works the panels
@@ -805,7 +809,23 @@ export function useControllerGrips({
       }
       return 0;
     };
-    const pointing = {}; // hand -> the panel its ray is on: its stick works that panel, not the player
+    const pointing = {}; // hand -> the panel its ray is on: its stick scrolls that panel, not the player
+    for (const hand of HANDS) {
+      const c = controllers[hand];
+      pointing[hand] = c && !holding.current[hand] ? panelPointed(c) : null;
+      const scrollBy = pointing[hand] && groupOf(pointing[hand].key)?.userData.scrollBy;
+      if (scrollBy && c.stick.y) scrollBy(c.stick.y * MENU_SCROLL_SPEED * dt);
+    }
+    // hand -> the panel another controller points at, which this one's stick steps through: the controller
+    // it's docked on (docked on the pointing one itself, or not docked, the other); not while it points at one itself
+    const stepping = {};
+    for (const hand of HANDS) {
+      const at = pointing[hand];
+      if (!at) continue;
+      const on = docks.current[at.key]?.on;
+      const by = on && on !== hand ? on : otherHand(hand);
+      if (controllers[by] && !holding.current[by] && !pointing[by]) stepping[by] = at;
+    }
     let stepped = false; // (a stick or B / Y moved the lit control, not the ray: that ticks)
     for (const hand of HANDS) {
       const c = controllers[hand];
@@ -815,9 +835,8 @@ export function useControllerGrips({
       }
       const probe = probes[hand]?.current;
       probe?.material.color.set(menuMode.current[hand] ? PROBE_MENU_COLOR : PROBE_COLOR);
-      const aimed = c && !holding.current[hand] ? panelPointed(c) : null;
-      pointing[hand] = aimed;
-      if (!c || holding.current[hand] || (!menuMode.current[hand] && !aimed)) {
+      const aimed = stepping[hand] ?? null; // (the panel another controller points at)
+      if (!c || holding.current[hand] || pointing[hand] || (!menuMode.current[hand] && !aimed)) {
         focus.current[hand] = null;
         pointedAt.current[hand] = null;
         continue;
@@ -884,14 +903,14 @@ export function useControllerGrips({
     }
     // flying, the way the left controller points (up and down too; sideways stays level), and turning about the head
     const lc = controllers.left;
-    if (o && lc && !holding.current.left && !menuMode.current.left && !pointing.left && (lc.stick.x || lc.stick.y)) {
+    if (o && lc && !holding.current.left && !menuMode.current.left && !pointing.left && !stepping.left && (lc.stick.x || lc.stick.y)) {
       const forward = _v.copy(lc.ray.direction);
       const right = _axis.setFromMatrixColumn(lc.rayMatrix, 0).setY(0);
       if (right.lengthSq() > 1e-6) right.normalize();
       o.position.addScaledVector(forward, -lc.stick.y * MOVE_SPEED * dt * k).addScaledVector(right, lc.stick.x * MOVE_SPEED * dt * k);
     }
     const rc = controllers.right;
-    const rightFree = o && rc && !holding.current.right && !menuMode.current.right && !pointing.right;
+    const rightFree = o && rc && !holding.current.right && !menuMode.current.right && !pointing.right && !stepping.right;
     // (whichever way it's tilted more: a push a little off straight doesn't do both)
     if (rightFree && Math.abs(rc.stick.y) > Math.abs(rc.stick.x)) {
       // pushed up: rising (stick y is negative up); down: sinking (below the floor too: free flight)

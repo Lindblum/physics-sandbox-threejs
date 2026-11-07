@@ -43,8 +43,11 @@
 //                            (× the preset's), and where struck (see particles.js)
 //   shader                   a look of its own instead of the table's (bubble: a soap film's swirling
 //                            thin-film colours, see Physics.jsx bubbleLook)
-//   pops                     yes: it bursts at the first touch of anything (a soap bubble; see Bubbles
+//   pops                     yes: it bursts at the first touch of anything not bubble_safe (a soap bubble; see Bubbles
 //                            in Physics.jsx), and a light breeze carries it
+//   bubble_safe              yes: a soap bubble touches it without bursting: wet things (its film just
+//                            joins them) and soft fibres (it bounces on wool); other bubbles too, which
+//                            it sticks to
 //   spherical                yes: surface tension pulls it round, whatever shape it's made or stretched
 //                            into (a ball of the same volume: see shapes.js asSphere)
 //   the rest                 for simulations to come (heat, melting, fluids, sound in it)
@@ -113,6 +116,7 @@ function material(row) {
     impactParticles: row.impact_particles ?? null,
     shader: row.shader ?? null,
     pops: row.pops === 'yes',
+    bubbleSafe: row.bubble_safe === 'yes',
     spherical: row.spherical === 'yes',
     light: n(row.light_cd, 0),
     luster: row.luster,
