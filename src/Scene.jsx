@@ -352,9 +352,12 @@ function placingSpec(tool, material, clip) {
 
 const _yaw = new THREE.Quaternion();
 
-/** Something `spec` describes, made at `position`, turned by `quaternion` (Physics.jsx makeBody; a liquid, sand or cloth a pour of grains). */
-function made(spec, position, quaternion) {
-  const id = spec.material === 'random' ? randomMaterial().id : spec.material;
+/**
+ * Something `spec` describes, made at `position`, turned by `quaternion` (Physics.jsx makeBody; a liquid, sand or cloth a pour of grains).
+ * `allowed`: Physics' Allow toggles, which Random keeps to.
+ */
+function made(spec, position, quaternion, allowed) {
+  const id = spec.material === 'random' ? randomMaterial(allowed).id : spec.material;
   const rotation = new THREE.Euler().setFromQuaternion(quaternion);
   return makeBody(spec.shape, id, position.toArray(), [rotation.x, rotation.y, rotation.z], false, {
     ...(spec.transform && { transform: spec.transform }),
@@ -377,7 +380,7 @@ function made(spec, position, quaternion) {
  * (pointer id -> object id), for its label. Returns [handlers(id) for an
  * object's mesh, handlers for the disc's, click(e, id) for the grains'].
  */
-function useTools({ tool, material, clip, setClip, registry, bodies, holds, setBodies, pointed, setSelected, preview, xrPlaces }) {
+function useTools({ tool, material, allowed, clip, setClip, registry, bodies, holds, setBodies, pointed, setSelected, preview, xrPlaces }) {
   const spec = placingSpec(tool, material, clip);
   const controls = useThree((s) => s.controls);
   const drag = useRef(null); // { id, pointerId, ray, distance, offset }
@@ -445,7 +448,7 @@ function useTools({ tool, material, clip, setClip, registry, bodies, holds, setB
     // (in XR the triggers place them, at their wireframes)
     if (e.internalPointer && xrPlaces) return;
     e.stopPropagation();
-    const body = made(spec, restingAt(e), _yaw.identity());
+    const body = made(spec, restingAt(e), _yaw.identity(), allowed);
     setBodies((list) => withMade(list, body));
   };
 
@@ -591,7 +594,7 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   placing.current = spec;
   const surfaces = () => [discMesh.current, ...[...registry.values()].map((e) => e.mesh.current)].filter(Boolean);
   const onPlace = (what, position, quaternion) => {
-    const body = made(what, position, quaternion);
+    const body = made(what, position, quaternion, state.allowed);
     setBodies((list) => withMade(list, body));
   };
   // the object Select picked last (its frame shows, to stretch it by)
@@ -601,6 +604,7 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
   const [handlers, discHandlers, click] = useTools({
     tool: state.tool,
     material: state.material,
+    allowed: state.allowed,
     clip: state.clip,
     setClip,
     registry,

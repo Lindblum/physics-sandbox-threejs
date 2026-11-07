@@ -5,7 +5,7 @@
 // slider sets a value along its track; the rest toggle when pressed.
 
 import { XR_RESOLUTION } from './xrResolution.js';
-import { MATERIALS } from './materials.js';
+import { MATERIALS, isAllowed, materialKind } from './materials.js';
 import { SHAPES } from './shapes.js';
 
 export const MENU_TITLE = 'Physics Sandbox';
@@ -30,16 +30,43 @@ export const TOOLS = [
   ...Object.values(SHAPES).map((s) => ({ value: s.id, label: s.label, icon: s.id === 'cube' ? 'shape' : s.id === 'sphere' ? 'sphere' : `shape:${s.id}` })),
 ];
 
-/** The scene scale as shown: ×1 is real size. */
+/**
+ * The scene scale as shown, as a ratio (as in earth-threejs): "1:1" is real
+ * size, "2.5:1" two and a half times it, "1:20" a twentieth. One decimal
+ * under 10 (SCENE_SCALE reaches 20 and 1:20), whole numbers above.
+ */
 export function scaleLabel(scale) {
-  return `×${scale >= 10 ? scale.toFixed(1) : scale >= 0.995 ? scale.toFixed(2) : scale.toFixed(3)}`;
+  const ratio = (n) => (n >= 9.95 ? Math.round(n) : +n.toFixed(1));
+  return scale >= 1 ? `${ratio(scale)}:1` : `1:${ratio(1 / scale)}`;
 }
 
 /** The Material dropdown's choices: Random (a solid one each time), then the table's, alphabetically. */
 export const MATERIAL_CHOICES = [
   { value: 'random', label: 'Random' },
-  ...MATERIALS.map((m) => ({ value: m.id, label: m.name })).sort((a, b) => a.label.localeCompare(b.label)),
+  ...MATERIALS.map((m) => ({ value: m.id, label: m.name, material: m })).sort((a, b) => a.label.localeCompare(b.label)),
 ];
+
+/**
+ * Physics' Allow toggles: the kinds of material that can cost a lot to
+ * simulate (see materials.js materialKind). Off, that kind can't be made and
+ * those already made are taken away. { id: setting id, kind, label, icon }.
+ */
+export const ALLOW = [
+  { id: 'allowSoft', kind: 'soft', label: 'Soft Bodies', icon: 'soft' },
+  { id: 'allowJiggle', kind: 'jiggle', label: 'Jiggle', icon: 'jiggle' },
+  { id: 'allowFluid', kind: 'fluid', label: 'Fluids', icon: 'fluid' },
+  { id: 'allowCloth', kind: 'cloth', label: 'Cloth', icon: 'cloth' },
+  { id: 'allowGrains', kind: 'grains', label: 'Grains', icon: 'grains' },
+  { id: 'allowParticle', kind: 'particle', label: 'Particles', icon: 'particle' },
+];
+const ALLOW_TITLES = {
+  soft: 'Gelatin, Foam, Silicone, Wet Clay and Wool: squashy bodies of many linked points. Off: none made, those on the disc taken away',
+  jiggle: 'Flubber and Glue: solids that wobble when struck. Off: none made, those on the disc taken away',
+  fluid: 'Water, Oil, Honey and Mercury: liquids of many droplets. Off: none poured, those on the disc taken away',
+  cloth: 'Fabric: a sheet of many linked points. Off: none made, those on the disc taken away',
+  grains: 'Sand: hundreds of small grains that pour and heap. Off: none poured, those on the disc taken away',
+  particle: "Smoke, Steam, Haze, Heavy Fog, Dander, Fire and Plasma: streams of drifting sprites (cheaper: they don't collide). Off: none made, those on the disc taken away",
+};
 
 /**
  * The panels, one template for both renderers (the windowed one in App.jsx,
@@ -61,7 +88,7 @@ export function optionsPanel({ scale, ...menu }) {
       id: SCALE_RESET,
       label: scaleLabel(scale),
       title: scale === 1 ? 'Scene scale: real size. In XR, hold both grips in mid-air and move your hands apart or together to scale it' : 'Scene scale. Press for real size',
-      widest: scaleLabel(0.051),
+      widest: '1:9.9',
     },
     ...menu,
   };
@@ -86,6 +113,12 @@ export function viewPanel(inXR) {
 export function toolsPanel(state) {
   const tool = TOOLS.find((t) => t.value === state.tool) ?? TOOLS[0];
   const material = MATERIAL_CHOICES.find((m) => m.value === state.material) ?? MATERIAL_CHOICES[0];
+  // (the kinds switched off in Physics can't be chosen)
+  const materials = MATERIAL_CHOICES.map(({ material: m, ...choice }) => {
+    if (!m || isAllowed(m, state.allowed)) return choice;
+    const kind = ALLOW.find((a) => a.kind === materialKind(m));
+    return { ...choice, disabled: true, title: `Physics → ${kind.label} is off` };
+  });
   // (Paste: nothing to paste until something's copied)
   const tools = TOOLS.map((t) => (t.value === 'paste' && !state.clip ? { ...t, disabled: true, title: 'Copy an object first' } : t));
   const items = [
@@ -94,7 +127,7 @@ export function toolsPanel(state) {
       id: 'material',
       label: `Material: ${material.label}`,
       icon: 'material',
-      dropdown: dropdown(state, 'material', MATERIAL_CHOICES, material.value),
+      dropdown: dropdown(state, 'material', materials, material.value),
       title: 'What Cube and Sphere make things of',
     },
   ];
@@ -259,7 +292,7 @@ export function menuItems(state, env) {
   });
   return [
     group('file', 'File', 'file', ['new', 'save', 'open']),
-    group('physics', 'Physics', 'gravity', ['gravity', 'simulation', 'physicsRate', 'grainDetail', 'clothDetail', 'reset']),
+    group('physics', 'Physics', 'physics', ['gravity', 'simulation', 'physicsRate', 'grainDetail', 'clothDetail', ...ALLOW.map((a) => a.id), 'reset']),
     group('video', 'Video', 'video', ['background', 'view', 'grid', 'reflections', 'refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'liquidDetail', 'particles', 'vsync', 'xrResolution']),
     group('accessibility', 'Accessibility', 'accessibility', ['volume', 'vibration', 'textSize', 'controllerGuide']),
   ];
@@ -311,6 +344,10 @@ function settingsById(state, env) {
     },
     { id: 'gravity', label: `Gravity: ${state.gravity ? 'On' : 'Off'}`, icon: state.gravity ? 'gravity' : 'gravityOff', title: 'Off: objects float where they are let go' },
     { id: 'simulation', label: `Simulation: ${state.paused ? 'Paused' : 'Running'}`, icon: state.paused ? 'pause' : 'play' },
+    ...ALLOW.map(({ id, kind, label, icon }) => {
+      const on = state.allowed?.[kind] !== false;
+      return { id, label: `${label}: ${on ? 'On' : 'Off'}`, icon: on ? icon : `${icon}Off`, title: ALLOW_TITLES[kind] };
+    }),
     { id: 'new', label: 'New Scene', icon: 'newScene', title: 'Clear the disc: every object gone (Physics → Reset Objects brings back the ten cubes)' },
     { id: 'save', label: 'Save Scene (.glb)', icon: 'save', title: 'Download the scene as glTF, which Blender imports (File → Import → glTF 2.0)' },
     { id: 'open', label: 'Open Scene (.glb)', icon: 'open', title: 'Load a scene saved here, or one from Blender that kept its custom properties' },
@@ -468,6 +505,7 @@ export function possibleLabels(env) {
   labels.add(`Vibration: ${percent(VIBRATION.max)}`);
   labels.add(`XR Resolution: ${percent(XR_RESOLUTION.max)} (on release)`);
   for (const flag of [false, true]) {
+    for (const a of ALLOW) labels.add(`${a.label}: ${flag ? 'On' : 'Off'}`);
     labels.add(`Controller Guide: ${flag ? 'On' : 'Off'}`);
     labels.add(`VSync: ${flag ? 'On' : 'Off'}`);
   }

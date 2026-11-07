@@ -19,11 +19,11 @@ import { useGazeTarget } from './Gaze.jsx';
 
 const W = 1000; // canvas px of the reference width...
 const WIDTH_M = 0.44; // ...which is this many metres: sets the text size in XR
-const PAD = 40;
-const TITLE_Y = 72;
+const PAD = 32;
+const TITLE_Y = 68; // (PAD + TOGGLE / 2: the gear on the padding)
 const LINE_H = 40; // the XR status line
 const BUTTON_H = 62;
-const GAP = 22;
+const GAP = 16; // between every button and the next, at every level (threejs-ui)
 const ICON = 44;
 const ICON_GAP = 28; // between icon and text
 const TOGGLE = 72; // the gear button, top left, that collapses and opens the panel...
@@ -70,7 +70,7 @@ const TRAILING = 36; // a dropdown's chevron, at the right edge
 // a dropdown's choices: two to a row beneath its button, indented
 const OPTION_FONT = `400 30px ${FONT}`;
 const OPTION_H = 52;
-const OPTION_GAP = 12;
+const OPTION_GAP = 10;
 const OPTION_INDENT = 54;
 const CHECK = 30;
 const OPTION_ICON = 32;
@@ -113,7 +113,7 @@ function panelWidth(title, labels, choices, sliderLabels, corner) {
 }
 
 /** Where the settings start, beneath the title and status line. */
-const bodyTop = (lines) => TITLE_Y + 34 + lines * LINE_H + 16;
+const bodyTop = (lines) => TITLE_Y + 34 + lines * LINE_H + 10;
 
 /**
  * Canvas size and the hit rectangles for this state: { id, x, y, w, h } plus

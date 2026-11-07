@@ -1,4 +1,4 @@
-import { Fragment, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { Canvas } from '@react-three/fiber';
 import { XR, createXRStore, useXRSessionModeSupported } from '@react-three/xr';
@@ -9,10 +9,12 @@ import { XR_RESOLUTION, setXRViewportScale } from './xrResolution.js';
 import { CardboardOverlay, canUseCardboard, enterCardboard, exitCardboard } from './Cardboard.jsx';
 import { startingBodies } from './Physics.jsx';
 import { openScene, saveScene } from './sceneFile.js';
-import { initSound, setVolume, wakeSoundInXR } from './sound.js';
+import { initSound, playTick, setVolume, wakeSoundInXR } from './sound.js';
 import { Stopped, rememberError, takeLastError } from './Recovery.jsx';
 import { setVibration } from './grip.js';
+import { isAllowed, materialById } from './materials.js';
 import {
+  ALLOW,
   MENU_TOGGLE,
   PICK_PREFIX,
   MATERIAL_CHOICES,
@@ -160,6 +162,20 @@ function loadReflections() {
 const ACCESSIBILITY_KEY = 'physics-sandbox.accessibility';
 const XR_RESOLUTION_KEY = 'physics-sandbox.xrResolution';
 const VSYNC_KEY = 'physics-sandbox.vsync';
+const ALLOW_KEY = 'physics-sandbox.allow';
+
+/** Physics' Allow toggles, as last left: { soft, jiggle, fluid, cloth, grains, particle }, each on unless switched off. */
+function loadAllowed() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(ALLOW_KEY)) ?? {};
+  } catch {
+    // (the defaults)
+  }
+  return Object.fromEntries(ALLOW.map(({ kind }) => [kind, saved[kind] !== false]));
+}
+/** `bodies` without those of a kind switched off. */
+const allowedBodies = (bodies, allowed) => bodies.filter((b) => isAllowed(materialById(b.material), allowed));
 
 function loadVSync() {
   try {
@@ -208,7 +224,23 @@ function loadAccessibility() {
 }
 
 function useViewerState() {
-  const [bodies, setBodies] = useState(startingBodies); // the objects (see Physics.jsx)
+  // Physics' Allow toggles; a kind switched off is never in `bodies` (taken out however they come: made, pasted, opened, reset)
+  const [allowed, setAllowed] = useState(loadAllowed);
+  const allowedRef = useRef(allowed);
+  allowedRef.current = allowed;
+  const [bodies, setAllBodies] = useState(() => allowedBodies(startingBodies(), allowed)); // the objects (see Physics.jsx)
+  const setBodies = useCallback((next) => setAllBodies((prev) => allowedBodies(typeof next === 'function' ? next(prev) : next, allowedRef.current)), []);
+  useEffect(() => {
+    setAllBodies((prev) => {
+      const kept = allowedBodies(prev, allowed);
+      return kept.length === prev.length ? prev : kept;
+    });
+    try {
+      localStorage.setItem(ALLOW_KEY, JSON.stringify(allowed));
+    } catch {
+      // (not remembered)
+    }
+  }, [allowed]);
   const [gravity, setGravity] = useState(true);
   const [background, setBackground] = useState('skybox'); // 'solid' | 'skybox' | 'passthrough'
   const [screenView, setScreenView] = useState('normal'); // outside XR: 'normal' | 'sbs' | 'interlaced'
@@ -284,6 +316,28 @@ function useViewerState() {
   }, [xrResolution]);
   // turned down during a session: shown at once, each eye drawn into less of the framebuffer
   useEffect(() => setXRViewportScale(xrResolution, xrResolutionActive), [xrResolution, xrResolutionActive]);
+  // Text Size being dragged: only its label shows the new size, until it's let go (the panels
+  // growing under the pointer as it moved would move the slider under it too)
+  const [textSizeDragged, setTextSizeDragged] = useState(null);
+  const dragged = useRef(null);
+  const dragTextSize = (v) => setTextSizeDragged((dragged.current = snapToSlider(TEXT_SIZE, v)));
+  const commitTextSize = () => {
+    const v = dragged.current;
+    if (v == null) return;
+    dragged.current = null;
+    setTextSizeDragged(null);
+    setAccessibility((a) => ({ ...a, textSize: v }));
+  };
+  useEffect(() => {
+    if (textSizeDragged == null) return;
+    // (let go anywhere: the slider may not hear it)
+    window.addEventListener('pointerup', commitTextSize);
+    window.addEventListener('pointercancel', commitTextSize);
+    return () => {
+      window.removeEventListener('pointerup', commitTextSize);
+      window.removeEventListener('pointercancel', commitTextSize);
+    };
+  }, [textSizeDragged != null]); // eslint-disable-line react-hooks/exhaustive-deps
   // Text Size: the windowed panel's text and icons (styles.css --text-scale)
   useEffect(() => {
     document.documentElement.style.setProperty('--text-scale', String(accessibility.textSize));
@@ -293,6 +347,7 @@ function useViewerState() {
     () => ({
       setBodies,
       toggleGravity: () => setGravity((v) => !v),
+      toggleAllowed: (kind) => setAllowed((a) => ({ ...a, [kind]: !a[kind] })),
       setGravity,
       setVolume: (v) => setAccessibility((a) => ({ ...a, volume: snapToSlider(VOLUME, v) })),
       setVibration: (v) => setAccessibility((a) => ({ ...a, vibration: snapToSlider(VIBRATION, v) })),
@@ -325,7 +380,8 @@ function useViewerState() {
       toggleGroup: (id) => setGroups(toggleIn(id)),
       toggleDropdown: (id) => setDropdowns(toggleIn(id)),
       closeDropdown: (id) => setDropdowns((list) => list.filter((x) => x !== id)),
-      setTextSize: (v) => setAccessibility((a) => ({ ...a, textSize: snapToSlider(TEXT_SIZE, v) })),
+      dragTextSize,
+      commitTextSize,
       toggleControllerGuide: () => setAccessibility((a) => ({ ...a, controllerGuide: !a.controllerGuide })),
       setXRResolution: (v) => setXRResolution(snapToSlider(XR_RESOLUTION, v)),
       toggleVSync: () => setVSync((v) => !v),
@@ -338,8 +394,10 @@ function useViewerState() {
   const state = {
     bodies,
     gravity,
+    allowed,
     tool: tools.tool,
-    material: tools.material,
+    // (a material switched off in Physics: Random instead)
+    material: tools.material === 'random' || isAllowed(materialById(tools.material), allowed) ? tools.material : 'random',
     toolsOpen: tools.open,
     reflections,
     ...effects,
@@ -357,6 +415,7 @@ function useViewerState() {
     groups,
     dropdowns,
     ...accessibility,
+    textSizeDragged,
     vsync,
     xrResolution,
     xrResolutionActive,
@@ -567,10 +626,55 @@ function XROverlay({ children }) {
  * `panels`: the template's panels, Options first; `onSelect(id)` for their
  * buttons. A click outside them closes Options.
  */
+/**
+ * 3D: SBS draws each panel twice, a copy for each eye: scrolling either
+ * copy's body (wheel, drag, keys, scrollbar) scrolls the other's to match,
+ * so both eyes see the same. The copy last pointed at, touched or typed in
+ * leads, and every frame the other is set to it: only ever one way, so the
+ * two never pull against each other (as copying each scroll event both
+ * ways did, its echo dragging a smooth or flung scroll back), and nothing
+ * that scrolls one copy can leave the other behind.
+ * `ref`: the element round both copies (.sbs-eyes).
+ */
+function useMirroredScroll(ref, active) {
+  useEffect(() => {
+    const root = ref.current;
+    if (!active || !root) return;
+    let leader = null; // the .sbs-eye last used; the first until then
+    const onInput = (e) => {
+      const eye = e.target instanceof Element && e.target.closest('.sbs-eye');
+      if (eye) leader = eye;
+    };
+    const inputs = ['pointerdown', 'wheel', 'touchstart', 'keydown', 'focusin'];
+    // (capture: seen before anything stops them)
+    for (const type of inputs) root.addEventListener(type, onInput, { capture: true, passive: true });
+    let frame;
+    const sync = () => {
+      const eyes = [...root.querySelectorAll('.sbs-eye')];
+      const lead = eyes.includes(leader) ? leader : eyes[0];
+      const bodies = lead ? [...lead.querySelectorAll('.hud-body')] : [];
+      for (const eye of eyes) {
+        if (eye === lead) continue;
+        eye.querySelectorAll('.hud-body').forEach((body, i) => {
+          const top = bodies[i]?.scrollTop;
+          if (top != null && body.scrollTop !== top) body.scrollTop = top;
+        });
+      }
+      frame = requestAnimationFrame(sync);
+    };
+    frame = requestAnimationFrame(sync);
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const type of inputs) root.removeEventListener(type, onInput, { capture: true });
+    };
+  }, [ref, active]);
+}
+
 function Hud({ panels, right, onSelect, error, sbs, resizable }) {
   const panel = useRef(null);
   const [size, setSize] = useState(null); // { width, height } dragged to, in px
   useClickOutside(panel, panels[0].open, () => onSelect(MENU_TOGGLE));
+  useMirroredScroll(panel, sbs);
   const panelProps = { panels, onSelect, error, size: resizable ? size : null, onResize: resizable ? setSize : null };
   // `right`: the Tools panel, in the top-right corner
   const rightProps = right && { panels: right, onSelect, right: true };
@@ -831,11 +935,14 @@ export default function App() {
         ? `XR: phone AR, tracked, ${state.stereo ? 'stereo' : 'mono'}`
         : `XR: headset ${sessionMode === 'immersive-ar' ? 'AR' : 'VR'}`;
 
-  const items = menuItems(state, { passthroughAvailable, views, phone, checking: !support.checked && !phone });
+  const items = menuItems(state.textSizeDragged != null ? { ...state, textSize: state.textSizeDragged } : state, { passthroughAvailable, views, phone, checking: !support.checked && !phone });
   const tools = toolsPanel(state);
   const onSelect = (id) => {
     const slide = parseSlide(id);
+    // every button and choice clicks (as in grid-game-threejs); a slider's drag and release don't
+    if (!slide && !parseSlideEnd(id)) playTick();
     if (slide) slideTo(slide.id, slide.value);
+    else if (parseSlideEnd(id) === 'textSize') actions.commitTextSize();
     else if (parseSlideEnd(id) === 'xrResolution') setRestartWanted(true); // (let go: the new resolution takes a new session)
     else if (id.startsWith(PICK_PREFIX)) {
       // a choice from an open dropdown's list, which then closes
@@ -852,6 +959,7 @@ export default function App() {
     else if (items.find((item) => item.id === id)?.group) actions.toggleGroup(id);
     else if (settingItems([...items, ...tools.items]).find((item) => item.id === id)?.dropdown) actions.toggleDropdown(id);
     else if (id === 'gravity') actions.toggleGravity();
+    else if (ALLOW.some((a) => a.id === id)) actions.toggleAllowed(ALLOW.find((a) => a.id === id).kind);
     else if (id === 'simulation') actions.togglePause();
     else if (id === 'reset') actions.resetBodies();
     else if (id === 'new') actions.setBodies([]);
@@ -880,7 +988,7 @@ export default function App() {
     else if (id === SCALE_RESET) actions.resetScale();
   };
   const slideTo = (id, value) => {
-    if (id === 'textSize') actions.setTextSize(value);
+    if (id === 'textSize') actions.dragTextSize(value);
     else if (id === 'volume') actions.setVolume(value);
     else if (id === 'vibration') actions.setVibration(value);
     else if (['physicsRate', 'grainDetail', 'clothDetail', 'liquidDetail'].includes(id)) actions.setDetail(id, value);

@@ -156,8 +156,26 @@ export const AIR_DENSITY = AIR.density;
 export const DISC_MATERIAL = materialById('concrete');
 /** The ten starting cubes', one each. */
 export const STARTING_MATERIALS = ['wood', 'steel', 'rubber', 'ice', 'glass', 'granite', 'foam', 'aluminium', 'gold', 'plastic'].map(materialById);
-/** A solid or liquid one at random (a gas would float away, a plasma hover). */
-export function randomMaterial() {
-  const pick = MATERIALS.filter((m) => m.solid && m.gravityScale == null && !m.simulation);
+/**
+ * What a material is simulated as beyond a rigid body, for Physics' Allow
+ * toggles (they can cost a lot): 'soft', 'cloth', 'fluid' (a liquid of
+ * droplets), 'grains' (sand: hundreds of small colliding bodies), 'particle'
+ * (a gas or plasma giving off a stream of sprites, which don't collide),
+ * 'jiggle' (a rigid body that wobbles), or null.
+ */
+export function materialKind(m) {
+  if (m.simulation === 'soft') return 'soft';
+  if (m.simulation === 'granular') return 'grains';
+  if ((m.state === 'gas' || m.state === 'plasma') && m.particles) return 'particle';
+  if (m.simulation === 'cloth') return 'cloth';
+  if (m.simulation === 'liquid') return 'fluid';
+  return m.jiggle > 0 ? 'jiggle' : null;
+}
+/** Whether `m` may be made: `allowed` is { soft, jiggle, fluid, cloth, grains, particle }, each true unless switched off. */
+export const isAllowed = (m, allowed = {}) => allowed[materialKind(m)] !== false;
+
+/** A solid or liquid one at random (a gas would float away, a plasma hover), of those `allowed`. */
+export function randomMaterial(allowed) {
+  const pick = MATERIALS.filter((m) => m.solid && m.gravityScale == null && !m.simulation && isAllowed(m, allowed));
   return pick[Math.floor(Math.random() * pick.length)];
 }

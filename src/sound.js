@@ -98,6 +98,29 @@ export function setListener(matrix) {
   }
 }
 
+/**
+ * The menus' click, as in grid-game-threejs: a 35 ms sine chirp, F♯6 down to
+ * F6, straight out (not placed in the scene). See ../threejs-ui/README.md.
+ */
+let lastTick = -Infinity;
+export function playTick() {
+  if (!ctx || volume <= 0) return; // (still starting: it plays once it has)
+  const t = ctx.currentTime;
+  if (t - lastTick < 0.04) return; // repeats this close are dropped, so quick presses don't pile up
+  lastTick = t;
+  const dur = 0.035;
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.frequency.setValueAtTime(1479.98, t);
+  o.frequency.exponentialRampToValueAtTime(1396.91, t + dur);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.05, t + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(master);
+  o.start(t);
+  o.stop(t + dur + 0.02);
+}
+
 function panner(at) {
   const p = ctx.createPanner();
   p.panningModel = 'equalpower';

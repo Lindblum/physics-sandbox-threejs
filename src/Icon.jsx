@@ -17,15 +17,15 @@ import arrowDown from 'lineicons/assets/svgs/regular/arrow-downward.svg?raw';
 import floppy from 'lineicons/assets/svgs/regular/floppy-disk-1.svg?raw';
 import folder from 'lineicons/assets/svgs/regular/folder-1.svg?raw';
 import filePlus from 'lineicons/assets/svgs/regular/file-plus-circle.svg?raw';
-import fileMultiple from 'lineicons/assets/svgs/regular/file-multiple.svg?raw';
 import volume from 'lineicons/assets/svgs/regular/volume-high.svg?raw';
 import volumeMute from 'lineicons/assets/svgs/regular/volume-mute.svg?raw';
-import palette from 'lineicons/assets/svgs/regular/colour-palette-3.svg?raw';
 import bulb from 'lineicons/assets/svgs/regular/bulb-2.svg?raw';
 import clipboard from 'lineicons/assets/svgs/regular/clipboard.svg?raw';
 import trash from 'lineicons/assets/svgs/regular/trash-3.svg?raw';
 import layers from 'lineicons/assets/svgs/regular/layers-1.svg?raw';
 import cloud from 'lineicons/assets/svgs/regular/cloud-2.svg?raw';
+import waterDrop from 'lineicons/assets/svgs/regular/water-drop-1.svg?raw';
+import shirt from 'lineicons/assets/svgs/regular/shirt-1.svg?raw';
 import { SHAPES } from './shapes.js';
 
 // Lineicons ship with a fixed fill; recolour to follow the surrounding text
@@ -177,8 +177,28 @@ const gravityOff = gravity.replace(
 const struck = (svg) => svg.replace('</svg>', '<path d="M3.5 3.5 20.5 20.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>');
 const drawn = (d) =>
   `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="${d}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-// Refraction: a ray bent as it passes through a block
-const refraction = drawn('M7 4.75h10v14.5H7ZM2.75 8.5 7 10.25l10 3.5 4.25 1.75');
+// Refraction (as grid-game-threejs's): a gem with a ray of light bent as it passes through;
+// off, the ray goes straight through
+const GEM = 'M7.87 5.81 16.13 5.81 19.02 9.52 12 19.02 4.98 9.52Z';
+const refractionOn = drawn(`${GEM}M2.92 9.11 7.87 11.17 16.13 14.48 21.08 19.43`);
+const refractionOff = drawn(`${GEM}M2.92 9.11 21.08 16.54`);
+// Physics: an atom, three orbits round a nucleus
+const physics = `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><g stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="12" rx="10" ry="3.9"/><ellipse cx="12" cy="12" rx="10" ry="3.9" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="3.9" transform="rotate(-60 12 12)"/></g><circle cx="12" cy="12" r="1.6" fill="currentColor"/></svg>`;
+// Soft Bodies: a blob slumped on the ground
+const soft = drawn('M4.5 17.5c-.6-4.6 2.6-9.5 7.5-9.5s8.1 4.9 7.5 9.5ZM2.75 20.25h18.5');
+// Jiggle: a block of jelly with wobble lines either side
+const jiggle = drawn('M7.5 7.25c1.5-.6 7.5-.6 9 0 .6 3.2.6 8.3 0 11.5-1.5.6-7.5.6-9 0-.6-3.2-.6-8.3 0-11.5ZM4.25 9.5c-.9 1.5-.9 3.5 0 5M19.75 9.5c.9 1.5.9 3.5 0 5');
+// Material (as grid-game-threejs's Materials): a hexagonal block face with a crack and speckles
+const material = drawn('M12 4.16 18.79 8.08 18.79 15.92 12 19.84 5.21 15.92 5.21 8.08ZM8.7 7.87 11.17 11.17 10.35 13.65 13.24 16.54M11.17 11.17 15.3 10.35').replace(
+  '</svg>',
+  '<circle cx="15.3" cy="14.48" r="0.72" fill="currentColor"/><circle cx="7.87" cy="13.24" r="0.72" fill="currentColor"/></svg>',
+);
+// Grains: a heap of sand, a few grains still falling onto it
+const grains = drawn('M2.75 19.75c2.5-4.5 5.5-7 9.25-7s6.75 2.5 9.25 7ZM12 4.5v.01M9 8v.01M15 7v.01');
+// Particles: a scatter of grains, bigger low down
+const particle = `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><circle cx="6.5" cy="17" r="2"/><circle cx="12.5" cy="18.5" r="2"/><circle cx="18" cy="16" r="2"/><circle cx="9.5" cy="12" r="1.5"/><circle cx="15.5" cy="10.5" r="1.5"/><circle cx="7" cy="6.5" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="18" cy="5.5" r="1"/></g></svg>`;
+// File (as grid-game-threejs's): a page with its corner folded and two lines of text
+const file = drawn('M7.05 4.16h7.01l3.31 3.3v12.38H7.05ZM14.06 4.16v3.3h3.31M9.11 12.41h6.19M9.11 15.72h6.19');
 // Shadows: a ball and its shadow on the ground
 const shadows = drawn('M15.25 9a4.25 4.25 0 1 1-8.5 0 4.25 4.25 0 0 1 8.5 0ZM4.75 19.25c0 1 3.25 1.75 7.25 1.75s7.25-.75 7.25-1.75-3.25-1.75-7.25-1.75-7.25.75-7.25 1.75Z');
 // Liquid surfaces: smooth, a drop; droplets, three of them
@@ -197,8 +217,8 @@ const ICONS = {
   delete: recolour(trash),
   gridOn: grid,
   gridOff: struck(grid),
-  refractionOn: refraction,
-  refractionOff: struck(refraction),
+  refractionOn,
+  refractionOff,
   shadowsOn: shadows,
   shadowsOff: struck(shadows),
   glowOn: recolour(bulb),
@@ -216,7 +236,8 @@ const ICONS = {
   on: recolour(sun),
   off: recolour(ban),
   solid,
-  gear: recolour(gear),
+  // (drawn as small as grid-game-threejs's: 65% of the icon's box, not Lineicons' 81%)
+  gear: recolour(gear).replace(/viewBox="[^"]*"/, 'viewBox="-2.8 -2.19 29.6 29.6"'),
   edit: pencil,
   skybox: recolour(globe),
   passthrough: recolour(picture),
@@ -229,13 +250,26 @@ const ICONS = {
   eye: recolour(eye),
   gravity,
   gravityOff,
-  file: recolour(fileMultiple),
+  file,
+  physics,
+  particle,
+  grains,
+  grainsOff: struck(grains),
+  particleOff: struck(particle),
+  soft,
+  softOff: struck(soft),
+  jiggle,
+  jiggleOff: struck(jiggle),
+  fluid: recolour(waterDrop),
+  fluidOff: struck(recolour(waterDrop)),
+  cloth: recolour(shirt),
+  clothOff: struck(recolour(shirt)),
   newScene: recolour(filePlus),
   save: recolour(floppy),
   open: recolour(folder),
   soundOn: recolour(volume),
   soundOff: recolour(volumeMute),
-  material: recolour(palette),
+  material,
   // Vibration (as grid-game-threejs's): a controller's handle with buzz lines either side, or still and struck through
   vibrationOn: `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M9.1 4.3h5.8v15.4H9.1ZM5.8 7.7 4.3 10.1l1.5 2.4-1.5 2.4M18.2 7.7l1.5 2.4-1.5 2.4 1.5 2.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   vibrationOff: `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M9.1 4.3h5.8v15.4H9.1ZM4.3 20.2 19.7 3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
