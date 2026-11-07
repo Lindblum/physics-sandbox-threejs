@@ -2,8 +2,9 @@ import { useEffect, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useXRInputSourceState } from '@react-three/xr';
 import * as THREE from 'three';
+import { XR_CONTROLS as TEXTS } from './controls.js';
 
-// Accessibility → Controller Guide (XR), as in grid-game-threejs: a label
+// Accessibility → XR Control Guides, as in grid-game-threejs: a label
 // beside each of a controller's sticks, triggers and grips saying what it
 // does. Each label points, with a thin leader line, at the middle of that
 // part on the controller's own model (the motion-controllers layout's nodes
@@ -12,25 +13,6 @@ import * as THREE from 'three';
 // on its outer side, the trigger out in front. Text Size scales the labels.
 
 const HANDS = ['left', 'right'];
-/** What each part does, by hand (motion-controllers component ids); parts with nothing to do get no label. */
-const GRIP = 'Hold: pick up what the probe\ntouches or you point at, or a menu\nOn what the other holds: turn, resize\nBoth in mid-air: scale the scene\nTap twice: dock / undock\nTap 3 times: menus here';
-const TRIGGER = 'Point and press\nSelect: drag an object\nA shape: make one\nResizing: stretch along the hands\' line';
-const TEXTS = {
-  left: {
-    'xr-standard-trigger': TRIGGER,
-    'xr-standard-squeeze': GRIP,
-    'xr-standard-thumbstick': 'Fly (where it points)\nPointing at a menu: scroll it\nIts menu pointed at: step through\nPress: this hand\'s menus / back\nGripping: push / pull, roll',
-    'x-button': 'In menus: choose',
-    'y-button': 'In menus: back a level',
-  },
-  right: {
-    'xr-standard-trigger': TRIGGER,
-    'xr-standard-squeeze': GRIP,
-    'xr-standard-thumbstick': 'Turn; up / down: rise, sink\nPointing at a menu: scroll it\nIts menu pointed at: step through\nPress: this hand\'s menus / back\nGripping: push / pull, roll',
-    'a-button': 'In menus: choose',
-    'b-button': 'In menus: back a level',
-  },
-};
 /** The components labelled, in the columns' order (top to bottom). */
 const COMPONENTS = ['menu', 'y-button', 'b-button', 'x-button', 'a-button', 'xr-standard-thumbstick', 'xr-standard-trigger', 'xr-standard-squeeze'];
 /** Where each component's label goes: 'inner' (the side toward the other hand), 'outer', or 'front' (ahead of it). */

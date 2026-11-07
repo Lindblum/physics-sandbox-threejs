@@ -1,5 +1,5 @@
 // Options menu model shared by the windowed panel (DOM) and the XR panel
-// (drawn on a canvas): four groups, File, Physics, Display and Accessibility, each
+// (drawn on a canvas): five groups, File, Physics, Controls, Display and Accessibility, each
 // opening a list of setting buttons beneath it, each "Name: Value". A
 // dropdown opens a list of choices beneath it (a chevron on its right); a
 // slider sets a value along its track; the rest toggle when pressed.
@@ -7,6 +7,8 @@
 import { XR_RESOLUTION } from './xrResolution.js';
 import { MATERIALS, isAllowed, materialKind } from './materials.js';
 import { SHAPES } from './shapes.js';
+import { INPUT_NAMES, controlsGuide } from './controlsGuide.js';
+import { CONTROLS } from './controls.js';
 
 export const MENU_TITLE = 'Physics Sandbox';
 
@@ -274,7 +276,7 @@ export function pickedChoice(items, pickId) {
 }
 
 /**
- * Items: the groups File, Physics, Display and Accessibility, { id, label, icon, group: { open, items } },
+ * Items: the groups File, Physics, Controls, Display and Accessibility, { id, label, icon, group: { open, items } },
  * which, when open (in `state.groups`), list their settings beneath, indented like
  * a dropdown's choices. Settings: { id, label ("Name: Value", see splitLabel),
  * icon, disabled?, title?, dropdown?, slider? }. `slider`: { min, max, step, value }. `dropdown`: { open, options: [{ id,
@@ -290,9 +292,19 @@ export function menuItems(state, env) {
     icon,
     group: { open: state.groups.includes(id), items: ids.map((setting) => settings[setting]) },
   });
+  // Controls: no settings, but a drawing of what the input last touched does (controlsGuide.js)
+  const input = env.input ?? 'mk';
+  const controlsOpen = state.groups.includes('controls');
+  const controls = {
+    id: 'controls',
+    label: `Controls: ${INPUT_NAMES[input]}`,
+    icon: 'controls',
+    group: { open: controlsOpen, items: [], guide: controlsOpen ? controlsGuide(input, CONTROLS) : null },
+  };
   return [
     group('file', 'File', 'file', ['new', 'save', 'open']),
     group('physics', 'Physics', 'physics', ['gravity', 'simulation', 'physicsRate', 'grainDetail', 'clothDetail', ...ALLOW.map((a) => a.id), 'reset']),
+    controls,
     group('display', 'Display', 'display', ['view', 'background', 'grid', 'reflections', 'refraction', 'shadows', 'glowLights', 'surfaceDetail', 'liquidSurfaces', 'liquidDetail', 'particles', 'vsync', 'xrResolution']),
     group('accessibility', 'Accessibility', 'accessibility', ['volume', 'vibration', 'textSize', 'controllerGuide']),
   ];
@@ -465,7 +477,7 @@ function settingsById(state, env) {
     },
     {
       id: 'controllerGuide',
-      label: `Controller Guide: ${state.controllerGuide ? 'On' : 'Off'}`,
+      label: `XR Control Guides: ${state.controllerGuide ? 'On' : 'Off'}`,
       icon: state.controllerGuide ? 'controllerGuideOn' : 'controllerGuideOff',
       title: "In XR, labels beside the controllers' buttons saying what they do",
     },
@@ -495,7 +507,7 @@ export function possibleLabels(env) {
       for (const view of env.views)
         for (const item of Object.values(settingsById({ physicsRate: 60, grainDetail: 1, clothDetail: 1, liquidDetail: 56, gravity: flag, paused: flag, grid: flag, reflections: flag, refraction: flag, shadows: flag, glowLights: flag, surfaceDetail: flag, liquidSurfaces: flag, particles: flag ? 'high' : 'low', volume: 1, vibration: 1, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
           labels.add(item.label);
-  // the sliders' widest values, and Controller Guide both ways
+  // the sliders' widest values, and XR Control Guides both ways
   labels.add(`Text Size: ${percent(TEXT_SIZE.max)}`);
   labels.add(`Volume: ${percent(VOLUME.max)}`);
   labels.add(`Physics Rate: ${PHYSICS_RATE.max} Hz`);
@@ -506,8 +518,9 @@ export function possibleLabels(env) {
   labels.add(`XR Resolution: ${percent(XR_RESOLUTION.max)} (on release)`);
   for (const flag of [false, true]) {
     for (const a of ALLOW) labels.add(`${a.label}: ${flag ? 'On' : 'Off'}`);
-    labels.add(`Controller Guide: ${flag ? 'On' : 'Off'}`);
+    labels.add(`XR Control Guides: ${flag ? 'On' : 'Off'}`);
     labels.add(`VSync: ${flag ? 'On' : 'Off'}`);
   }
+  for (const name of Object.values(INPUT_NAMES)) labels.add(`Controls: ${name}`);
   return [...labels];
 }

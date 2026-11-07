@@ -68,8 +68,9 @@ Options → File → Save Scene downloads a `.glb` (glTF 2.0): the disc, every o
 | --- | --- |
 | File | New Scene (an empty disc), Save Scene (.glb), Open Scene (.glb) |
 | Physics | Gravity On / Off, Simulation Running / Paused, Physics Rate (30 to 240 Hz), Grain Detail and Cloth Detail (how fine pours and cloth are made), Soft Bodies / Jiggle / Fluids / Cloth / Grains / Particles On / Off (Off: that kind of material can't be made, Random skips it, and those already on the disc are taken away, since they can cost a lot), Reset Objects |
-| Video | Background (Solid, Skybox, Passthrough), View Mode, Show Grid (every 10 cm over the disc, up to 2 m), VSync, XR Resolution, and the costly effects, each to turn down where frames run short: Reflections, Refraction (off at first in a headset), Shadows, Glow Lights, Surface Detail, Liquid Surfaces (Smooth metaballs / Droplets) and their detail, Particles (High / Low). With the skybox behind, Reflections mirror it (brightened, with a studio's lights for highlights): plainly in polished metals, mercury, glass and ice; with a solid colour or passthrough, a neutral studio |
-| Accessibility | Volume, Vibration (to 200%), Text Size, Controller Guide |
+| Controls | What the input last touched does: the mouse and keys, a gamepad or the XR controllers, drawn and labelled |
+| Display | View Mode, Background (Solid, Skybox, Passthrough), Show Grid (every 10 cm over the disc, up to 2 m), VSync, XR Resolution, and the costly effects, each to turn down where frames run short: Reflections, Refraction (off at first in a headset), Shadows, Glow Lights, Surface Detail, Liquid Surfaces (Smooth metaballs / Droplets) and their detail, Particles (High / Low). With the skybox behind, Reflections mirror it (brightened, with a studio's lights for highlights): plainly in polished metals, mercury, glass and ice; with a solid colour or passthrough, a neutral studio |
+| Accessibility | Volume, Vibration (to 200%), Text Size, XR Control Guides |
 | Edit (its own panel) | Tool: Select (pick up), Copy, Paste, Delete, or a shape (make one); Material: Random or any of the 46 |
 
 ## Controls
