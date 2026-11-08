@@ -50,8 +50,7 @@ import {
 // How the display settings work:
 //   Background (Solid / Skybox / Passthrough): what is behind the disc. Changes live.
 //   View: picks from the views this device supports (see menu.js):
-//     Normal, 3D: SBS (half side-by-side, for 3D TVs) and 3D: Interlaced
-//     (alternate rows, for passive 3D monitors) are windowed.
+//     Normal and 3D: SBS (half side-by-side, for 3D TVs) are windowed.
 //     The XR views start a session, only from a tap, as browsers require.
 //
 // XR: HMD Stereo (headsets) starts an AR session where supported (so every
@@ -244,7 +243,7 @@ function useViewerState() {
   }, [allowed]);
   const [gravity, setGravity] = useState(true);
   const [background, setBackground] = useState('skybox'); // 'solid' | 'skybox' | 'passthrough'
-  const [screenView, setScreenView] = useState('normal'); // outside XR: 'normal' | 'sbs' | 'interlaced'
+  const [screenView, setScreenView] = useState('normal'); // outside XR: 'normal' | 'sbs'
   const [phoneStereo, setPhoneStereo] = useState(true); // phone XR: two lens-corrected eyes
   const [handheld, setHandheld] = useState(false); // the motion-sensor view is showing (phones without AR)
   const [paused, setPaused] = useState(false); // the simulation
@@ -623,7 +622,6 @@ function XROverlay({ children }) {
  * viewPanel; see XRMenuPanel for XR), stacked in the top-left corner.
  * In 3D: SBS each eye gets its own copy, squeezed into its half like the
  * scene, so the display stretches both back into one panel at screen depth.
- * 3D: Interlaced needs nothing: a flat panel already lies on both eyes' rows.
  * `resizable`: a handle at the bottom-right corner sets its width and the
  * height it may grow to (double-click it to fit the buttons again).
  * `panels`: the template's panels, Options first; `onSelect(id)` for their

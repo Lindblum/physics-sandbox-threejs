@@ -101,5 +101,5 @@ Options → File → Save Scene downloads a `.glb` (glTF 2.0): the disc, every o
 - `src/Scene.jsx`, `src/App.jsx`: the scene and the tools, app state, keyboard and windowed panels
 - `src/menu.js`, `src/XRMenuPanel.jsx`: the shared panels (Options, View, Edit) and their XR (canvas) panels
 - `src/Grab.jsx`, `src/grip.js`: grips, controller probes, scaling the scene and panel docking
-- `src/SideBySide.jsx`, `src/Interlaced.jsx`: windowed stereo views
+- `src/SideBySide.jsx`: the windowed stereo view
 - `src/PhoneStereo.jsx`, `src/Cardboard.jsx`, `src/CardboardLens.js`, `src/Gaze.jsx`: phone XR, phone viewers and gaze dwell-to-click

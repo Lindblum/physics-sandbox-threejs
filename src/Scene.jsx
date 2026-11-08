@@ -19,7 +19,6 @@ import { materialById, randomMaterial } from './materials.js';
 import { Fluids } from './Fluids.jsx';
 import { PhoneStereoCameraFeed, PhoneStereoXR } from './PhoneStereo.jsx';
 import { SideBySide } from './SideBySide.jsx';
-import { Interlaced } from './Interlaced.jsx';
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -703,7 +702,6 @@ export default function Scene({ state, panels, onSelect, menuOverlay, phone, bod
       <FramePacing seeThrough={false} vsync={state.vsync} />
       <RestoreViewAfterXR />
       {state.view === 'sbs' && !immersive && <SideBySide />}
-      {state.view === 'interlaced' && !immersive && <Interlaced />}
       {phoneStereo && <PhoneStereoXR />}
       {phoneStereo && state.passthrough && (
         <PhoneStereoCameraFeed
