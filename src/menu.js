@@ -62,7 +62,7 @@ export const ALLOW = [
   { id: 'allowParticle', kind: 'particle', label: 'Particles', icon: 'particle' },
 ];
 const ALLOW_TITLES = {
-  soft: 'Gelatin, Foam, Silicone, Wet Clay and Wool: squashy bodies of many linked points. Off: none made, those on the disc taken away',
+  soft: 'Gelatin, Foam, Silicone, Wet Clay, Wool and Soap Bubbles: squashy bodies of many linked points. Off: none made, those on the disc taken away',
   jiggle: 'Flubber and Glue: solids that wobble when struck. Off: none made, those on the disc taken away',
   fluid: 'Water, Oil, Honey and Mercury: liquids of many droplets. Off: none poured, those on the disc taken away',
   cloth: 'Fabric: a sheet of many linked points. Off: none made, those on the disc taken away',
@@ -324,6 +324,7 @@ function settingsById(state, env) {
           return {
             value: b,
             label: BACKGROUND_LABELS[b],
+            icon: b, // (as the field shows it)
             disabled: unavailable,
             title: unavailable ? 'Passthrough needs an XR headset or a phone camera' : undefined,
           };
@@ -498,14 +499,17 @@ function viewUnavailableReason(view, env) {
  * (The groups' labels are short, so they don't set it; the panels also fit
  * the dropdowns' choices, two to a row.)
  */
-export function possibleLabels(env) {
+function labelSets(env) {
   const labels = new Set();
+  const sliderNames = new Set(); // (a slider's row is its label and a track)
   const backgrounds = BACKGROUNDS.filter((b) => b !== 'passthrough' || env.passthroughAvailable);
   for (const flag of [false, true])
     for (const background of backgrounds)
       for (const view of env.views)
-        for (const item of Object.values(settingsById({ physicsRate: 60, grainDetail: 1, clothDetail: 1, liquidDetail: 56, gravity: flag, paused: flag, grid: flag, reflections: flag, refraction: flag, shadows: flag, glowLights: flag, surfaceDetail: flag, liquidSurfaces: flag, particles: flag ? 'high' : 'low', volume: 1, vibration: 1, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env)))
+        for (const item of Object.values(settingsById({ physicsRate: 60, grainDetail: 1, clothDetail: 1, liquidDetail: 56, gravity: flag, paused: flag, grid: flag, reflections: flag, refraction: flag, shadows: flag, glowLights: flag, surfaceDetail: flag, liquidSurfaces: flag, particles: flag ? 'high' : 'low', volume: 1, vibration: 1, background, view, dropdowns: [], textSize: 1, controllerGuide: flag, vsync: flag, xrResolution: 1, xrResolutionActive: null }, env))) {
           labels.add(item.label);
+          if (item.slider) sliderNames.add(splitLabel(item.label).name);
+        }
   // the sliders' widest values, and XR Control Guides both ways
   labels.add(`Text Size: ${percent(TEXT_SIZE.max)}`);
   labels.add(`Volume: ${percent(VOLUME.max)}`);
@@ -521,5 +525,9 @@ export function possibleLabels(env) {
     labels.add(`VSync: ${flag ? 'On' : 'Off'}`);
   }
   for (const name of Object.values(INPUT_NAMES)) labels.add(`Controls: ${name}`);
-  return [...labels];
+  return { labels: [...labels], sliderNames: [...sliderNames] };
 }
+
+export const possibleLabels = (env) => labelSets(env).labels;
+/** The names of the sliders among possibleLabels: the windowed panel sizes their rows with a track. */
+export const possibleSliderNames = (env) => labelSets(env).sliderNames;

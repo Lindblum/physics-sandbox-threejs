@@ -33,6 +33,7 @@ import {
   parseSlideEnd,
   pickedChoice,
   possibleLabels,
+  possibleSliderNames,
   settingItems,
   slideEndId,
   slideId,
@@ -473,20 +474,28 @@ function Label({ text }) {
   );
 }
 
-function MenuButtons({ items, labels, onSelect }) {
+function MenuButtons({ items, labels, sliderNames = [], onSelect }) {
   return (
     <div className="menu-items">
       <MenuList items={items} onSelect={onSelect} />
       {/* invisible, zero-height copies of every possible label and dropdown
           choice, indented like the settings in a group: they set the panel's width */}
       <div className="menu-sizer menu-group" aria-hidden="true">
-        {labels.map((label) => (
-          <div key={label} className="menu-btn">
-            <Icon name="shape" />
-            <Label text={label} />
-            <Icon name="dropdown" />
-          </div>
-        ))}
+        {labels.map((label) =>
+          sliderNames.includes(splitLabel(label).name) ? (
+            <div key={label} className="menu-btn menu-slider">
+              <Icon name="shape" />
+              <Label text={label} />
+              <input type="range" tabIndex={-1} />
+            </div>
+          ) : (
+            <div key={label} className="menu-btn">
+              <Icon name="shape" />
+              <Label text={label} />
+              <Icon name="dropdown" />
+            </div>
+          ),
+        )}
         <div className="menu-options">
           {settingItems(items).flatMap((item) =>
             (item.dropdown?.options ?? []).map((option) => (
@@ -788,7 +797,7 @@ function Panel({ panel, onSelect, error, size, onResize, stretch }) {
 
       <div className="hud-body">
         {panel.status && <p className="stats">{panel.status}</p>}
-        <MenuButtons items={panel.items} labels={panel.labels} onSelect={onSelect} />
+        <MenuButtons items={panel.items} labels={panel.labels} sliderNames={panel.sliderNames} onSelect={onSelect} />
         {error && (
           <p className="note error" role="alert">
             {error}
@@ -1021,9 +1030,10 @@ export default function App() {
     }
   };
   const labels = useMemo(() => possibleLabels({ passthroughAvailable, views }), [passthroughAvailable, views]);
+  const sliderNames = useMemo(() => possibleSliderNames({ passthroughAvailable, views }), [passthroughAvailable, views]);
   // the panels' template, shared by the windowed and XR renderers; the View
   // panel only where a headset can be used
-  const panels = { options: optionsPanel({ open: state.menuOpen, status, items, labels, scale: state.sceneScale }), view: views.includes('hmd') ? viewPanel(inXR) : null, tools };
+  const panels = { options: optionsPanel({ open: state.menuOpen, status, items, labels, sliderNames, scale: state.sceneScale }), view: views.includes('hmd') ? viewPanel(inXR) : null, tools };
   const leftPanels = [panels.options, ...(panels.view ? [panels.view] : [])];
 
   return (

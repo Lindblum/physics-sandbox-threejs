@@ -120,14 +120,14 @@ const controls = `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="
 <circle cx="17.76" cy="12.48" r="1" fill="currentColor"/>
 </svg>`;
 
-// Accessibility: the figure with open arms, in a circle
+// Accessibility: a figure with open arms, in a circle (grid-game-threejs's, drawn on this grid; the same in every project)
 const accessibility = `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-<circle cx="12" cy="12" r="9.25" stroke="currentColor" stroke-width="1.5"/>
-<circle cx="12" cy="7.4" r="1.4" fill="currentColor"/>
-<path d="M7.5 10.1 12 11l4.5-.9M12 11v3.2m0 0-2.2 3.6m2.2-3.6 2.2 3.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="12" cy="12" r="9.6" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="12" cy="6.5" r="1.5" fill="currentColor"/>
+<path d="M6.25 9.6h11.5M12 9.6v4.3M9.1 18.7l2.9-4.8 2.9 4.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
-// Text Size: a big A beside a small one
+// Text Size: a big A beside a small one (the same in every project)
 const textSize = `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
 <path d="M2.75 19.25 8 4.75l5.25 14.5M4.6 14.25h6.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
 <path d="M14.25 19.25 17.75 10l3.5 9.25M15.5 16.25h4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -207,6 +207,17 @@ const copy = drawn('M8.75 8.75h10.5v10.5H8.75ZM15.25 8.75v-4H4.75v10.5h4');
 const pencil = drawn('M15.75 4.75 19.25 8.25 8.5 19H5v-3.5ZM13.25 7.25l3.5 3.5');
 const grid = drawn('M4.75 4.75h14.5v14.5H4.75ZM9.6 4.75v14.5M14.4 4.75v14.5M4.75 9.6h14.5M4.75 14.4h14.5');
 
+// Vibration (xr-music-threejs's; the same in every project): a controller between buzz marks; off, the marks gone and a slash through it
+const vibrationBody = `<rect x="8" y="4" width="8" height="16" rx="2.5" stroke="currentColor" stroke-width="1.5"/>`;
+const vibrationOn = `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+${vibrationBody}
+<path d="M4.75 8.5 3 10.25l1.75 1.75L3 13.75l1.75 1.75M19.25 8.5 21 10.25l-1.75 1.75L21 13.75l-1.75 1.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+const vibrationOff = `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+${vibrationBody}
+<path d="M3.5 3.5l17 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</svg>`;
+
 const ICONS = {
   copy,
   paste: recolour(clipboard),
@@ -233,7 +244,7 @@ const ICONS = {
   off: recolour(ban),
   solid,
   // (drawn as small as grid-game-threejs's: 65% of the icon's box, not Lineicons' 81%)
-  gear: recolour(gear).replace(/viewBox="[^"]*"/, 'viewBox="-2.8 -2.19 29.6 29.6"'),
+  gear: recolour(gear),
   edit: pencil,
   skybox: recolour(globe),
   passthrough: recolour(picture),
@@ -266,9 +277,8 @@ const ICONS = {
   soundOn: recolour(volume),
   soundOff: recolour(volumeMute),
   material,
-  // Vibration (as grid-game-threejs's): a controller's handle with buzz lines either side, or still and struck through
-  vibrationOn: `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M9.1 4.3h5.8v15.4H9.1ZM5.8 7.7 4.3 10.1l1.5 2.4-1.5 2.4M18.2 7.7l1.5 2.4-1.5 2.4 1.5 2.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-  vibrationOff: `<svg width="1.25em" height="1.25em" viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M9.1 4.3h5.8v15.4H9.1ZM4.3 20.2 19.7 3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  vibrationOn,
+  vibrationOff,
   reflectionsOn: recolour(sun),
   reflectionsOff: recolour(sun).replace('</svg>', '<path d="M3.5 3.5 20.5 20.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'),
   edges,
